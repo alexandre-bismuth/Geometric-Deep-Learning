@@ -1,4 +1,4 @@
-experiment_id: A7
+experiment_id: zinc-novnode-rwse-10L-nompnn
 architecture:
   num_layers: 10
   mpnn: none

@@ -1,4 +1,4 @@
-experiment_id: V2
+experiment_id: pascal-novnode-lappe-4L
 
 data:
   dataset: pascal_voc_sp

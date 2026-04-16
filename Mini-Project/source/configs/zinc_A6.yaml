@@ -1,4 +1,4 @@
-experiment_id: A6
+experiment_id: zinc-vnode-rwse-10L-nompnn
 vnode:
   enabled: true
   num_node_types: 29
