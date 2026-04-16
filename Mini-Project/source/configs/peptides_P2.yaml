@@ -1,0 +1,23 @@
+experiment_id: P2
+
+data:
+  dataset: peptides_func
+  batch_size: 128
+  num_workers: 4
+  root: data
+
+pe:
+  type: lappe
+  dim: 10
+
+architecture:
+  num_layers: 4
+  mpnn: gine
+  task: multilabel_classification
+
+training:
+  epochs: 200
+  warmup_epochs: 10
+  lr: 0.0003
+  weight_decay: 0.0
+  grad_clip: 1.0

@@ -1,0 +1,23 @@
+experiment_id: V2
+
+data:
+  dataset: pascal_voc_sp
+  batch_size: 16
+  num_workers: 4
+  root: data
+
+pe:
+  type: lappe
+  dim: 10
+
+architecture:
+  num_layers: 4
+  mpnn: gine
+  task: node_classification
+
+training:
+  epochs: 200
+  warmup_epochs: 10
+  lr: 0.0003
+  weight_decay: 0.0
+  grad_clip: 1.0

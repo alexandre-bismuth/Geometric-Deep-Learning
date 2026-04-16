@@ -1,0 +1,5 @@
+experiment_id: A7
+architecture:
+  num_layers: 10
+  mpnn: none
+  task: regression
