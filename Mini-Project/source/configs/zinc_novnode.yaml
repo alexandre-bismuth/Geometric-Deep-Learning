@@ -1,0 +1,25 @@
+experiment_id: zinc-novnode
+
+model:
+  hidden_dim: 64
+  num_heads: 4
+
+architecture:
+  num_layers: 10
+  mpnn: gine
+  task: regression
+
+pe:
+  type: rwse
+  dim: 28
+
+data:
+  dataset: zinc
+  batch_size: 32
+
+training:
+  epochs: 1500
+  warmup_epochs: 50
+  lr: 0.001
+  weight_decay: 1.0e-5
+  grad_clip: 1.0

@@ -15,6 +15,8 @@ def build_criterion(task):
         return nn.BCEWithLogitsLoss()
     elif task == 'node_classification':
         return nn.CrossEntropyLoss()
+    elif task == 'graph_classification':
+        return nn.CrossEntropyLoss()
     else:
         raise ValueError(f"Unknown task: {task}")
 
@@ -55,6 +57,10 @@ def train_epoch(model, loader, optimizer, criterion, device, task, max_grad_norm
             target = batch.y.long()
             if target.dim() > 1:
                 target = target.squeeze(-1)
+        elif task == 'graph_classification':
+            target = batch.y.long()
+            if target.dim() > 1:
+                target = target.squeeze(-1)
 
         loss = criterion(pred, target)
         loss.backward()
@@ -62,7 +68,7 @@ def train_epoch(model, loader, optimizer, criterion, device, task, max_grad_norm
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
         optimizer.step()
 
-        n = batch.num_graphs if task != 'node_classification' else batch.y.size(0)
+        n = batch.num_graphs if task not in ('node_classification',) else batch.y.size(0)
         total_loss += loss.item() * n
         total_samples += n
 
@@ -90,10 +96,14 @@ def eval_epoch(model, loader, criterion, device, task):
             target = batch.y.long()
             if target.dim() > 1:
                 target = target.squeeze(-1)
+        elif task == 'graph_classification':
+            target = batch.y.long()
+            if target.dim() > 1:
+                target = target.squeeze(-1)
 
         loss = criterion(pred, target)
 
-        n = batch.num_graphs if task != 'node_classification' else batch.y.size(0)
+        n = batch.num_graphs if task not in ('node_classification',) else batch.y.size(0)
         total_loss += loss.item() * n
         total_samples += n
 
@@ -118,6 +128,11 @@ def eval_epoch(model, loader, criterion, device, task):
         targets_np = all_targets.numpy()
         metric_val = f1_score(targets_np, pred_labels, average='weighted', zero_division=0)
         metric_name = 'f1'
+    elif task == 'graph_classification':
+        pred_labels = all_preds.argmax(dim=-1).numpy()
+        targets_np = all_targets.numpy()
+        metric_val = (pred_labels == targets_np).mean()
+        metric_name = 'accuracy'
 
     return avg_loss, metric_val, metric_name
 

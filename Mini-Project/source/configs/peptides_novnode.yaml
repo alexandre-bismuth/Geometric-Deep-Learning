@@ -1,0 +1,26 @@
+experiment_id: peptides-novnode
+
+model:
+  hidden_dim: 96
+  num_heads: 4
+
+architecture:
+  num_layers: 4
+  mpnn: gatedgcn
+  task: multilabel_classification
+
+pe:
+  type: lappe
+  dim: 16
+
+data:
+  dataset: peptides_func
+  batch_size: 128
+  num_workers: 4
+
+training:
+  epochs: 200
+  warmup_epochs: 10
+  lr: 0.0003
+  weight_decay: 0.0
+  grad_clip: 1.0

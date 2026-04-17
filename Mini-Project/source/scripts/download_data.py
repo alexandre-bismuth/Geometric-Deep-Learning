@@ -24,13 +24,20 @@ def main():
         ds = ZINC(root=os.path.join(DATA_ROOT, 'ZINC'), subset=True, split=split)
         print(f"  {split}: {len(ds)} graphs")
 
-    # 2. Peptides-func
+    # 2. MNIST-SP
+    print("\n=== MNIST-SP ===")
+    from torch_geometric.datasets import GNNBenchmarkDataset
+    for split in ['train', 'val', 'test']:
+        ds = GNNBenchmarkDataset(root=os.path.join(DATA_ROOT, 'GNNBenchmark'), name='MNIST', split=split)
+        print(f"  {split}: {len(ds)} graphs")
+
+    # 3. Peptides-func
     print("\n=== Peptides-func ===")
     for split in ['train', 'val', 'test']:
         ds = LRGBDataset(root=os.path.join(DATA_ROOT, 'LRGB'), name='Peptides-func', split=split)
         print(f"  {split}: {len(ds)} graphs")
 
-    # 3. PascalVOC-SP
+    # 4. PascalVOC-SP
     print("\n=== PascalVOC-SP ===")
     for split in ['train', 'val', 'test']:
         ds = LRGBDataset(root=os.path.join(DATA_ROOT, 'LRGB'), name='PascalVOC-SP', split=split)

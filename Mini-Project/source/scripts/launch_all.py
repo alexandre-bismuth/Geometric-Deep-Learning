@@ -17,10 +17,11 @@ from collections import deque
 
 CONFIGS_DIR = Path("configs")
 
-ZINC_CONFIGS = ["zinc_B1", "zinc_A1", "zinc_A2", "zinc_A3", "zinc_A4", "zinc_A5", "zinc_A6", "zinc_A7"]
-PEPTIDES_CONFIGS = ["peptides_P1", "peptides_P2"]
-PASCAL_CONFIGS = ["pascal_V1", "pascal_V2"]
-ALL_CONFIGS = ZINC_CONFIGS + PEPTIDES_CONFIGS + PASCAL_CONFIGS
+ZINC_CONFIGS = ["zinc_vnode", "zinc_novnode"]
+MNIST_CONFIGS = ["mnist_vnode", "mnist_novnode"]
+PEPTIDES_CONFIGS = ["peptides_vnode", "peptides_novnode", "peptides_vnode_3L", "peptides_vnode_8L"]
+PASCAL_CONFIGS = ["pascal_vnode", "pascal_novnode"]
+ALL_CONFIGS = ZINC_CONFIGS + MNIST_CONFIGS + PEPTIDES_CONFIGS + PASCAL_CONFIGS
 
 
 def get_num_gpus():
@@ -59,7 +60,8 @@ def launch_experiment(config_name, gpu_id, log_dir, extra_args=None):
 def main():
     parser = argparse.ArgumentParser(description="Launch experiments in parallel across GPUs")
     parser.add_argument("--all", action="store_true", help="Run all 12 experiments")
-    parser.add_argument("--zinc-only", action="store_true", help="Run only ZINC experiments (B1, A1-A7)")
+    parser.add_argument("--zinc-only", action="store_true", help="Run only ZINC experiments")
+    parser.add_argument("--mnist-only", action="store_true", help="Run only MNIST-SP experiments")
     parser.add_argument("--peptides-only", action="store_true", help="Run only Peptides experiments")
     parser.add_argument("--pascal-only", action="store_true", help="Run only PascalVOC experiments")
     parser.add_argument("--configs", nargs="+", help="Specific config names to run")
@@ -72,6 +74,8 @@ def main():
         config_names = args.configs
     elif args.zinc_only:
         config_names = ZINC_CONFIGS
+    elif args.mnist_only:
+        config_names = MNIST_CONFIGS
     elif args.peptides_only:
         config_names = PEPTIDES_CONFIGS
     elif args.pascal_only:
@@ -80,7 +84,7 @@ def main():
         config_names = ALL_CONFIGS
     else:
         parser.print_help()
-        print("\nSpecify --all, --zinc-only, or --configs <names>")
+        print("\nSpecify --all, --zinc-only, --mnist-only, or --configs <names>")
         return
 
     num_gpus = get_num_gpus()

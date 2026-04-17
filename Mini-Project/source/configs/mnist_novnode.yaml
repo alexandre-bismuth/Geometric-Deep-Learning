@@ -1,0 +1,26 @@
+experiment_id: mnist-novnode
+
+model:
+  hidden_dim: 52
+  num_heads: 4
+
+architecture:
+  num_layers: 3
+  mpnn: gatedgcn
+  task: graph_classification
+
+pe:
+  type: lappe
+  dim: 8
+
+data:
+  dataset: mnist_sp
+  batch_size: 16
+  num_workers: 4
+
+training:
+  epochs: 100
+  warmup_epochs: 5
+  lr: 0.001
+  weight_decay: 1.0e-5
+  grad_clip: 1.0

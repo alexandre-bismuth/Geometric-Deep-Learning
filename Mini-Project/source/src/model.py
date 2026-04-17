@@ -4,7 +4,7 @@ Supports all ablation axes:
 - VNode: via num_node_types / num_edge_types (28/4 without, 29/5 with)
 - PE: RWSE, LapPE, or None
 - MPNN: GINE or None (Transformer-only)
-- Task: regression, multilabel_classification, node_classification
+- Task: regression, graph_classification, multilabel_classification, node_classification
 - Depth: configurable num_layers
 """
 
@@ -24,6 +24,43 @@ class IdentityConv(MessagePassing):
 
     def forward(self, x, edge_index, **kwargs):
         return x
+
+
+class GatedGCNLayer(MessagePassing):
+    """GatedGCN layer matching the GraphGPS paper implementation.
+
+    Messages are gated: msg = sigmoid(gate) * (A*x_j + B*e_ij)
+    """
+    def __init__(self, in_channels, out_channels, edge_dim=None):
+        super().__init__(aggr='add')
+        self.lin_src = nn.Linear(in_channels, out_channels)
+        self.lin_dst = nn.Linear(in_channels, out_channels)
+        self.lin_edge = nn.Linear(edge_dim or in_channels, out_channels)
+        self.lin_gate = nn.Linear(3 * out_channels, out_channels)
+        self.bn_node = nn.BatchNorm1d(out_channels)
+        self.bn_edge = nn.BatchNorm1d(out_channels)
+        self.act = nn.ReLU()
+
+    def forward(self, x, edge_index, edge_attr=None, **kwargs):
+        if edge_attr is None:
+            edge_attr = torch.zeros(edge_index.size(1), x.size(1), device=x.device)
+
+        h_src = self.lin_src(x)
+        h_dst = self.lin_dst(x)
+        e = self.lin_edge(edge_attr)
+
+        # Store for message passing
+        self._h_src = h_src
+        self._e = e
+
+        out = self.propagate(edge_index, x=h_dst, h_src=h_src, e=e)
+        out = self.bn_node(out)
+        out = self.act(out + x)  # residual
+        return out
+
+    def message(self, h_src_j, x_i, e):
+        gate = torch.sigmoid(self.lin_gate(torch.cat([h_src_j, x_i, e], dim=-1)))
+        return gate * h_src_j
 
 
 class InstrumentedGPS(nn.Module):
@@ -90,6 +127,8 @@ class InstrumentedGPS(nn.Module):
                     nn.Linear(hidden_dim, hidden_dim),
                 )
                 local_model = GINEConv(gine_nn, edge_dim=hidden_dim)
+            elif mpnn_type == 'gatedgcn':
+                local_model = GatedGCNLayer(hidden_dim, hidden_dim, edge_dim=hidden_dim)
             else:
                 local_model = IdentityConv(hidden_dim)
 
@@ -210,4 +249,4 @@ class InstrumentedGPS(nn.Module):
             out = self.output_head(graph_emb)
             if self.task == 'regression':
                 return out.squeeze(-1)
-            return out  # multilabel: (batch, num_classes)
+            return out  # multilabel/graph_classification: (batch, num_classes)

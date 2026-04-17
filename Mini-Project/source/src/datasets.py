@@ -2,6 +2,7 @@
 
 Supports:
 - ZINC-12k (~23 nodes, graph regression)
+- MNIST-SP (~75 nodes, graph classification)
 - Peptides-func (~150 nodes, multilabel graph classification)
 - PascalVOC-SP (~480 nodes, node classification)
 """
@@ -49,6 +50,16 @@ DATASET_INFO = {
         'input_type': 'continuous',
         'node_feat_dim': 14,
         'edge_feat_dim': 2,
+    },
+    'mnist_sp': {
+        'task': 'graph_classification',
+        'metric': 'accuracy',
+        'num_classes': 10,
+        'num_node_types': None,
+        'num_edge_types': None,
+        'input_type': 'continuous',
+        'node_feat_dim': 3,    # x, y coordinates + pixel value
+        'edge_feat_dim': 1,    # edge weight
     },
 }
 
@@ -113,6 +124,12 @@ def get_datasets(config):
         train = LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='PascalVOC-SP', split='train', transform=transform)
         val = LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='PascalVOC-SP', split='val', transform=transform)
         test = LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='PascalVOC-SP', split='test', transform=transform)
+
+    elif dataset_name == 'mnist_sp':
+        from torch_geometric.datasets import GNNBenchmarkDataset
+        train = GNNBenchmarkDataset(root=os.path.join(data_root, 'GNNBenchmark'), name='MNIST', split='train', transform=transform)
+        val = GNNBenchmarkDataset(root=os.path.join(data_root, 'GNNBenchmark'), name='MNIST', split='val', transform=transform)
+        test = GNNBenchmarkDataset(root=os.path.join(data_root, 'GNNBenchmark'), name='MNIST', split='test', transform=transform)
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
