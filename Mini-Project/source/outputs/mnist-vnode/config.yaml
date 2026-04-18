@@ -1,0 +1,36 @@
+architecture:
+  mpnn: gatedgcn
+  num_layers: 3
+  task: graph_classification
+data:
+  batch_size: 16
+  dataset: mnist_sp
+  num_workers: 2
+  root: data
+diagnostics:
+  enabled: true
+  max_graphs: 200
+experiment_id: mnist-vnode
+logging:
+  save_dir: outputs
+  wandb_project: graph-transformer-sinks
+model:
+  attn_dropout: 0.5
+  dropout: 0.0
+  hidden_dim: 52
+  num_heads: 4
+pe:
+  dim: 8
+  type: lappe
+training:
+  epochs: 100
+  grad_clip: 1.0
+  lr: 0.001
+  warmup_epochs: 5
+  weight_decay: 1.0e-05
+vnode:
+  enabled: true
+  num_edge_types: 5
+  num_node_types: 29
+  vnode_edge_type: 4
+  vnode_node_type: 28

@@ -1,0 +1,36 @@
+architecture:
+  mpnn: gatedgcn
+  num_layers: 4
+  task: multilabel_classification
+data:
+  batch_size: 128
+  dataset: peptides_func
+  num_workers: 4
+  root: data
+diagnostics:
+  enabled: true
+  max_graphs: 200
+experiment_id: peptides-novnode
+logging:
+  save_dir: outputs
+  wandb_project: graph-transformer-sinks
+model:
+  attn_dropout: 0.5
+  dropout: 0.0
+  hidden_dim: 96
+  num_heads: 4
+pe:
+  dim: 16
+  type: lappe
+training:
+  epochs: 200
+  grad_clip: 1.0
+  lr: 0.0003
+  warmup_epochs: 10
+  weight_decay: 0.0
+vnode:
+  enabled: false
+  num_edge_types: 4
+  num_node_types: 28
+  vnode_edge_type: 4
+  vnode_node_type: 28
