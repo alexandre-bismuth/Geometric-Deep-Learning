@@ -7,6 +7,21 @@ import numpy as np
 from sklearn.metrics import average_precision_score, f1_score
 
 
+def _build_real_node_mask(batch):
+    """Build a boolean mask that is True for real nodes, False for VNodes.
+
+    Each graph in the batch has a VNode as its last node. We use the batch
+    tensor to find the boundary of each graph and exclude the last node.
+    """
+    mask = torch.ones(batch.x.size(0), dtype=torch.bool, device=batch.x.device)
+    _, counts = batch.batch.unique(return_counts=True)
+    offset = 0
+    for c in counts:
+        mask[offset + c - 1] = False  # last node in each graph is VNode
+        offset += c
+    return mask
+
+
 def build_criterion(task):
     """Build loss function based on task type."""
     if task == 'regression':
@@ -57,6 +72,10 @@ def train_epoch(model, loader, optimizer, criterion, device, task, max_grad_norm
             target = batch.y.long()
             if target.dim() > 1:
                 target = target.squeeze(-1)
+            if hasattr(batch, 'vnode_idx'):
+                real_mask = _build_real_node_mask(batch)
+                pred = pred[real_mask]
+                target = target[real_mask]
         elif task == 'graph_classification':
             target = batch.y.long()
             if target.dim() > 1:
@@ -96,6 +115,10 @@ def eval_epoch(model, loader, criterion, device, task):
             target = batch.y.long()
             if target.dim() > 1:
                 target = target.squeeze(-1)
+            if hasattr(batch, 'vnode_idx'):
+                real_mask = _build_real_node_mask(batch)
+                pred = pred[real_mask]
+                target = target[real_mask]
         elif task == 'graph_classification':
             target = batch.y.long()
             if target.dim() > 1:
@@ -103,7 +126,7 @@ def eval_epoch(model, loader, criterion, device, task):
 
         loss = criterion(pred, target)
 
-        n = batch.num_graphs if task not in ('node_classification',) else batch.y.size(0)
+        n = batch.num_graphs if task not in ('node_classification',) else target.size(0)
         total_loss += loss.item() * n
         total_samples += n
 
@@ -126,7 +149,7 @@ def eval_epoch(model, loader, criterion, device, task):
     elif task == 'node_classification':
         pred_labels = all_preds.argmax(dim=-1).numpy()
         targets_np = all_targets.numpy()
-        metric_val = f1_score(targets_np, pred_labels, average='weighted', zero_division=0)
+        metric_val = f1_score(targets_np, pred_labels, average='macro', zero_division=0)
         metric_name = 'f1'
     elif task == 'graph_classification':
         pred_labels = all_preds.argmax(dim=-1).numpy()
