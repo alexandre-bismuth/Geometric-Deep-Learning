@@ -31,17 +31,23 @@ class AddVirtualNode(BaseTransform):
         vnode_idx = num_nodes
         device = data.x.device if data.x is not None else 'cpu'
 
+        # --- Pad precomputed PE tensors FIRST (before x changes num_nodes) ---
+        for pe_attr in ['random_walk_pe', 'laplacian_pe']:
+            if hasattr(data, pe_attr) and data[pe_attr] is not None:
+                pe = data[pe_attr]
+                if pe.dim() == 2 and pe.size(0) == num_nodes:
+                    pad = torch.zeros(1, pe.size(1), device=pe.device, dtype=pe.dtype)
+                    data[pe_attr] = torch.cat([pe, pad], dim=0)
+
         # --- Node features ---
         if data.x is not None:
             if data.x.dtype in (torch.long, torch.int, torch.int32):
-                # Integer node types (e.g., ZINC: atom types 0-27)
                 if data.x.dim() == 1:
                     vnode_x = torch.tensor([self.vnode_node_type], device=device)
                 else:
                     vnode_x = torch.full((1, data.x.size(1)), self.vnode_node_type,
                                          dtype=data.x.dtype, device=device)
             else:
-                # Continuous features (e.g., Peptides, PascalVOC) — use zeros
                 if data.x.dim() == 1:
                     vnode_x = torch.zeros(1, device=device, dtype=data.x.dtype)
                 else:
@@ -51,8 +57,6 @@ class AddVirtualNode(BaseTransform):
         # --- Edges: VNode <-> all real nodes (bidirectional) ---
         real_nodes = torch.arange(num_nodes, device=device)
         vnode_repeated = torch.full((num_nodes,), vnode_idx, dtype=torch.long, device=device)
-
-        # real -> vnode, vnode -> real
         new_src = torch.cat([real_nodes, vnode_repeated])
         new_dst = torch.cat([vnode_repeated, real_nodes])
         new_edges = torch.stack([new_src, new_dst], dim=0)
@@ -69,14 +73,6 @@ class AddVirtualNode(BaseTransform):
                                            self.vnode_edge_type,
                                            dtype=data.edge_attr.dtype, device=device)
             data.edge_attr = torch.cat([data.edge_attr, new_edge_attr], dim=0)
-
-        # --- Pad precomputed PE tensors with a zero row for VNode ---
-        for pe_attr in ['random_walk_pe', 'laplacian_pe']:
-            if hasattr(data, pe_attr) and data[pe_attr] is not None:
-                pe = data[pe_attr]
-                if pe.size(0) == num_nodes:  # PE was computed before VNode
-                    pad = torch.zeros(1, pe.size(1), device=pe.device, dtype=pe.dtype)
-                    data[pe_attr] = torch.cat([pe, pad], dim=0)
 
         # --- Store VNode index for diagnostics ---
         data.vnode_idx = vnode_idx
