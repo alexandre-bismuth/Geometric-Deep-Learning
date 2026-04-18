@@ -79,3 +79,43 @@ class AddVirtualNode(BaseTransform):
         return (f'{self.__class__.__name__}('
                 f'vnode_node_type={self.vnode_node_type}, '
                 f'vnode_edge_type={self.vnode_edge_type})')
+
+
+class SafeLaplacianPE(BaseTransform):
+    """LapPE that gracefully handles graphs with fewer nodes than k.
+
+    If num_nodes <= k, clamps k to num_nodes - 1 and zero-pads the PE
+    to the requested dimension.
+    """
+
+    def __init__(self, k=16, attr_name='laplacian_pe', is_undirected=True):
+        from torch_geometric.transforms import AddLaplacianEigenvectorPE
+        self.k = k
+        self.attr_name = attr_name
+        self.is_undirected = is_undirected
+        self._base_class = AddLaplacianEigenvectorPE
+
+    def forward(self, data):
+        n = data.num_nodes
+        actual_k = min(self.k, n - 1)
+
+        if actual_k <= 0:
+            data[self.attr_name] = torch.zeros(n, self.k)
+            return data
+
+        transform = self._base_class(
+            k=actual_k,
+            attr_name=self.attr_name,
+            is_undirected=self.is_undirected,
+        )
+        data = transform(data)
+
+        if actual_k < self.k:
+            pe = data[self.attr_name]
+            padding = torch.zeros(n, self.k - actual_k, device=pe.device, dtype=pe.dtype)
+            data[self.attr_name] = torch.cat([pe, padding], dim=-1)
+
+        return data
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(k={self.k})'

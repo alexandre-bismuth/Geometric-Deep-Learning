@@ -13,12 +13,12 @@ import numpy as np
 import torch
 from torch_geometric.datasets import ZINC, LRGBDataset
 from torch_geometric.loader import DataLoader
-from torch_geometric.transforms import Compose, AddRandomWalkPE, AddLaplacianEigenvectorPE
+from torch_geometric.transforms import Compose, AddRandomWalkPE
 from torch_geometric.utils import get_laplacian, to_scipy_sparse_matrix, degree
 from scipy.sparse.linalg import eigsh
 from tqdm import tqdm
 
-from .transforms import AddVirtualNode
+from .transforms import AddVirtualNode, SafeLaplacianPE
 
 
 # Dataset metadata
@@ -88,7 +88,7 @@ def build_transforms(config):
             attr_name='random_walk_pe',
         ))
     elif pe_type == 'lappe' and pe_dim > 0:
-        transforms.append(AddLaplacianEigenvectorPE(
+        transforms.append(SafeLaplacianPE(
             k=pe_dim,
             attr_name='laplacian_pe',
             is_undirected=True,
