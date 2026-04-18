@@ -19,8 +19,8 @@ CONFIGS_DIR = Path("configs")
 
 ZINC_CONFIGS = ["zinc_vnode", "zinc_novnode"]
 MNIST_CONFIGS = ["mnist_vnode", "mnist_novnode"]
-PEPTIDES_CONFIGS = ["peptides_vnode", "peptides_novnode", "peptides_vnode_3L", "peptides_vnode_8L"]
-PASCAL_CONFIGS = ["pascal_vnode", "pascal_novnode"]
+PEPTIDES_CONFIGS = ["peptides_vnode", "peptides_novnode"]
+PASCAL_CONFIGS = ["pascal_vnode", "pascal_novnode", "pascal_novnode_3L", "pascal_novnode_8L"]
 ALL_CONFIGS = ZINC_CONFIGS + MNIST_CONFIGS + PEPTIDES_CONFIGS + PASCAL_CONFIGS
 
 

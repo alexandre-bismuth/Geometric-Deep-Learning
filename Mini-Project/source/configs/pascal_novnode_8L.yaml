@@ -1,0 +1,26 @@
+experiment_id: pascal-novnode-8L
+
+model:
+  hidden_dim: 96
+  num_heads: 8
+
+architecture:
+  num_layers: 8
+  mpnn: gatedgcn
+  task: node_classification
+
+pe:
+  type: lappe
+  dim: 16
+
+data:
+  dataset: pascal_voc_sp
+  batch_size: 32
+  num_workers: 4
+
+training:
+  epochs: 300
+  warmup_epochs: 10
+  lr: 0.0005
+  weight_decay: 0.0
+  grad_clip: 1.0
