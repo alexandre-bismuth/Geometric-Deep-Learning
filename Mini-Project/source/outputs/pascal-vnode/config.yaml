@@ -1,0 +1,36 @@
+architecture:
+  mpnn: gatedgcn
+  num_layers: 4
+  task: node_classification
+data:
+  batch_size: 32
+  dataset: pascal_voc_sp
+  num_workers: 4
+  root: data
+diagnostics:
+  enabled: true
+  max_graphs: 200
+experiment_id: pascal-vnode
+logging:
+  save_dir: outputs
+  wandb_project: graph-transformer-sinks
+model:
+  attn_dropout: 0.5
+  dropout: 0.0
+  hidden_dim: 96
+  num_heads: 8
+pe:
+  dim: 16
+  type: lappe
+training:
+  epochs: 300
+  grad_clip: 1.0
+  lr: 0.0005
+  warmup_epochs: 10
+  weight_decay: 0.0
+vnode:
+  enabled: true
+  num_edge_types: 5
+  num_node_types: 29
+  vnode_edge_type: 4
+  vnode_node_type: 28
