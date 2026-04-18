@@ -206,6 +206,8 @@ class InstrumentedGPS(nn.Module):
         else:
             if x.dtype == torch.long:
                 x = x.float()
+            if x.dim() == 1:
+                x = x.unsqueeze(-1)
             x = self.node_emb(x)
 
         # --- Add PE ---
@@ -229,6 +231,8 @@ class InstrumentedGPS(nn.Module):
         else:
             if edge_attr.dtype == torch.long:
                 edge_attr = edge_attr.float()
+            if edge_attr.dim() == 1:
+                edge_attr = edge_attr.unsqueeze(-1)
             edge_attr = self.edge_emb(edge_attr)
 
         # --- Record input ---
