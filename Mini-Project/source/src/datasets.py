@@ -58,7 +58,7 @@ DATASET_INFO = {
         'num_node_types': None,
         'num_edge_types': None,
         'input_type': 'continuous',
-        'node_feat_dim': 3,    # x, y coordinates + pixel value
+        'node_feat_dim': 1,    # pixel intensity only (pos is separate)
         'edge_feat_dim': 1,    # edge weight
     },
 }
