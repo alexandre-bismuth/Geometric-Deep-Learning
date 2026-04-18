@@ -70,6 +70,14 @@ class AddVirtualNode(BaseTransform):
                                            dtype=data.edge_attr.dtype, device=device)
             data.edge_attr = torch.cat([data.edge_attr, new_edge_attr], dim=0)
 
+        # --- Pad precomputed PE tensors with a zero row for VNode ---
+        for pe_attr in ['random_walk_pe', 'laplacian_pe']:
+            if hasattr(data, pe_attr) and data[pe_attr] is not None:
+                pe = data[pe_attr]
+                if pe.size(0) == num_nodes:  # PE was computed before VNode
+                    pad = torch.zeros(1, pe.size(1), device=pe.device, dtype=pe.dtype)
+                    data[pe_attr] = torch.cat([pe, pad], dim=0)
+
         # --- Store VNode index for diagnostics ---
         data.vnode_idx = vnode_idx
 
