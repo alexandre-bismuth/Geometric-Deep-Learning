@@ -64,41 +64,99 @@ DATASET_INFO = {
 }
 
 
-def build_transforms(config):
-    """Build the transform pipeline from config.
-
-    Order matters:
-    1. AddVirtualNode (if enabled) — before PE so VNode gets its own PE
-    2. PE transform (RWSE or LapPE)
-    """
-    transforms = []
-
-    if config['vnode']['enabled']:
-        transforms.append(AddVirtualNode(
-            vnode_node_type=config['vnode']['vnode_node_type'],
-            vnode_edge_type=config['vnode']['vnode_edge_type'],
-        ))
-
+def _build_pe_transform(config):
+    """Build ONLY the PE transform (expensive, worth caching)."""
     pe_type = config['pe']['type']
     pe_dim = config['pe']['dim']
 
     if pe_type == 'rwse' and pe_dim > 0:
-        transforms.append(AddRandomWalkPE(
-            walk_length=pe_dim,
-            attr_name='random_walk_pe',
-        ))
+        return AddRandomWalkPE(walk_length=pe_dim, attr_name='random_walk_pe')
     elif pe_type == 'lappe' and pe_dim > 0:
-        transforms.append(SafeLaplacianPE(
-            k=pe_dim,
-            attr_name='laplacian_pe',
-            is_undirected=True,
-        ))
+        return SafeLaplacianPE(k=pe_dim, attr_name='laplacian_pe', is_undirected=True)
+    return None
 
-    return Compose(transforms) if transforms else None
+
+def _build_vnode_transform(config):
+    """Build ONLY the VNode transform (cheap, applied at load time)."""
+    if config['vnode']['enabled']:
+        return AddVirtualNode(
+            vnode_node_type=config['vnode']['vnode_node_type'],
+            vnode_edge_type=config['vnode']['vnode_edge_type'],
+        )
+    return None
+
+
+def _pe_cache_path(data_root, dataset_name, split, pe_type, pe_dim):
+    """Path for cached PE-augmented dataset."""
+    cache_dir = os.path.join(data_root, 'pe_cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, f'{dataset_name}_{split}_{pe_type}{pe_dim}.pt')
+
+
+def _load_raw_dataset(dataset_name, data_root, split):
+    """Load a raw dataset (no transforms) for a single split."""
+    if dataset_name == 'zinc':
+        return ZINC(root=os.path.join(data_root, 'ZINC'), subset=True, split=split)
+    elif dataset_name == 'peptides_func':
+        return LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='Peptides-func', split=split)
+    elif dataset_name == 'pascal_voc_sp':
+        return LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='PascalVOC-SP', split=split)
+    elif dataset_name == 'mnist_sp':
+        from torch_geometric.datasets import GNNBenchmarkDataset
+        return GNNBenchmarkDataset(root=os.path.join(data_root, 'GNNBenchmark'), name='MNIST', split=split)
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
+
+
+def _precompute_pe(dataset_name, data_root, split, pe_transform, pe_type, pe_dim):
+    """Precompute PE for a dataset split and cache to disk.
+
+    Returns list of PE-augmented Data objects.
+    """
+    cache_path = _pe_cache_path(data_root, dataset_name, split, pe_type, pe_dim)
+
+    if os.path.exists(cache_path):
+        print(f"  Loading cached PE for {dataset_name}/{split} from {cache_path}")
+        return torch.load(cache_path, weights_only=False)
+
+    print(f"  Precomputing {pe_type}(dim={pe_dim}) for {dataset_name}/{split}...")
+    raw_ds = _load_raw_dataset(dataset_name, data_root, split)
+
+    cached_data = []
+    for i in tqdm(range(len(raw_ds)), desc=f'  {split}'):
+        data = raw_ds[i].clone()
+        if pe_transform is not None:
+            data = pe_transform(data)
+        cached_data.append(data)
+
+    torch.save(cached_data, cache_path)
+    print(f"  Saved to {cache_path}")
+    return cached_data
+
+
+class PrecomputedDataset(torch.utils.data.Dataset):
+    """Wraps a list of Data objects with an optional runtime transform (e.g. VNode)."""
+
+    def __init__(self, data_list, transform=None):
+        self.data_list = data_list
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.data_list)
+
+    def __getitem__(self, idx):
+        data = self.data_list[idx].clone()
+        if self.transform is not None:
+            data = self.transform(data)
+        return data
 
 
 def get_datasets(config):
-    """Load train/val/test datasets with transforms applied.
+    """Load train/val/test datasets with precomputed PE and runtime VNode.
+
+    PE (expensive eigendecomposition) is computed once and cached to disk.
+    VNode (cheap node/edge addition) is applied at load time so the same
+    PE cache is shared between vnode and novnode experiments.
 
     Args:
         config: dict with keys 'data', 'vnode', 'pe'
@@ -107,40 +165,30 @@ def get_datasets(config):
         (train_dataset, val_dataset, test_dataset, info_dict)
     """
     dataset_name = config['data']['dataset']
-    transform = build_transforms(config)
     data_root = config['data'].get('root', 'data')
+    pe_type = config['pe']['type']
+    pe_dim = config['pe']['dim']
 
-    if dataset_name == 'zinc':
-        train = ZINC(root=os.path.join(data_root, 'ZINC'), subset=True, split='train', transform=transform)
-        val = ZINC(root=os.path.join(data_root, 'ZINC'), subset=True, split='val', transform=transform)
-        test = ZINC(root=os.path.join(data_root, 'ZINC'), subset=True, split='test', transform=transform)
+    pe_transform = _build_pe_transform(config)
+    vnode_transform = _build_vnode_transform(config)
 
-    elif dataset_name == 'peptides_func':
-        train = LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='Peptides-func', split='train', transform=transform)
-        val = LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='Peptides-func', split='val', transform=transform)
-        test = LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='Peptides-func', split='test', transform=transform)
+    datasets = {}
+    for split in ['train', 'val', 'test']:
+        if pe_transform is not None:
+            data_list = _precompute_pe(dataset_name, data_root, split,
+                                       pe_transform, pe_type, pe_dim)
+        else:
+            raw_ds = _load_raw_dataset(dataset_name, data_root, split)
+            data_list = [raw_ds[i] for i in range(len(raw_ds))]
 
-    elif dataset_name == 'pascal_voc_sp':
-        train = LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='PascalVOC-SP', split='train', transform=transform)
-        val = LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='PascalVOC-SP', split='val', transform=transform)
-        test = LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='PascalVOC-SP', split='test', transform=transform)
-
-    elif dataset_name == 'mnist_sp':
-        from torch_geometric.datasets import GNNBenchmarkDataset
-        train = GNNBenchmarkDataset(root=os.path.join(data_root, 'GNNBenchmark'), name='MNIST', split='train', transform=transform)
-        val = GNNBenchmarkDataset(root=os.path.join(data_root, 'GNNBenchmark'), name='MNIST', split='val', transform=transform)
-        test = GNNBenchmarkDataset(root=os.path.join(data_root, 'GNNBenchmark'), name='MNIST', split='test', transform=transform)
-    else:
-        raise ValueError(f"Unknown dataset: {dataset_name}")
+        datasets[split] = PrecomputedDataset(data_list, transform=vnode_transform)
 
     info = DATASET_INFO[dataset_name].copy()
-
-    # Adjust type counts if VNode is enabled
     if config['vnode']['enabled'] and info['num_node_types'] is not None:
         info['num_node_types'] = config['vnode']['num_node_types']
         info['num_edge_types'] = config['vnode']['num_edge_types']
 
-    return train, val, test, info
+    return datasets['train'], datasets['val'], datasets['test'], info
 
 
 def get_dataloaders(config):
