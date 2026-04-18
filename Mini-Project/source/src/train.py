@@ -73,9 +73,7 @@ def train_epoch(model, loader, optimizer, criterion, device, task, max_grad_norm
             if target.dim() > 1:
                 target = target.squeeze(-1)
             if hasattr(batch, 'vnode_idx'):
-                real_mask = _build_real_node_mask(batch)
-                pred = pred[real_mask]
-                target = target[real_mask]
+                pred = pred[_build_real_node_mask(batch)]
         elif task == 'graph_classification':
             target = batch.y.long()
             if target.dim() > 1:
@@ -116,9 +114,7 @@ def eval_epoch(model, loader, criterion, device, task):
             if target.dim() > 1:
                 target = target.squeeze(-1)
             if hasattr(batch, 'vnode_idx'):
-                real_mask = _build_real_node_mask(batch)
-                pred = pred[real_mask]
-                target = target[real_mask]
+                pred = pred[_build_real_node_mask(batch)]
         elif task == 'graph_classification':
             target = batch.y.long()
             if target.dim() > 1:
