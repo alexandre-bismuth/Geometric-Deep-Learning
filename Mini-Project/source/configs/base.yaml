@@ -9,7 +9,7 @@ model:
 
 data:
   dataset: peptides_func
-  batch_size: 32
+  batch_size: 8
   num_workers: 4
   root: data
 

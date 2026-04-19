@@ -56,29 +56,30 @@ class GritAttentionHead(nn.Module):
         k_dense, _ = _to_dense(k, batch, N_max)
         v_dense, _ = _to_dense(v, batch, N_max)
 
-        e_w = self.W_Ew(e)
-        e_b = self.W_Eb(e)
-
         qk = q_dense.unsqueeze(2) + k_dense.unsqueeze(1)
+        del q_dense, k_dense
 
-        e_hat = F.relu(signed_sqrt(qk * e_w) + e_b)
+        e_hat = F.relu(signed_sqrt(qk * self.W_Ew(e)) + self.W_Eb(e))
+        del qk
 
         attn_logits = self.W_A(e_hat).squeeze(-1)
-
         attn_mask = node_mask.unsqueeze(1) & node_mask.unsqueeze(2)
         attn_logits = attn_logits.masked_fill(~attn_mask, float('-inf'))
 
         attn_weights = F.softmax(attn_logits, dim=-1)
+        del attn_logits
         attn_weights = attn_weights.masked_fill(~attn_mask, 0.0)
         attn_weights = self.attn_dropout(attn_weights)
 
-        e_v = self.W_Ev(e_hat)
-        values = v_dense.unsqueeze(1) + e_v
+        values = v_dense.unsqueeze(1) + self.W_Ev(e_hat)
+        del v_dense
         x_attn = torch.matmul(attn_weights.unsqueeze(-2), values).squeeze(-2)
+        del values
 
         x_attn_flat = x_attn[node_mask]
         x_out = self.W_O(x_attn_flat)
         e_out_dense = self.W_Eo(e_hat)
+        del e_hat
 
         return x_out, e_out_dense, attn_weights
 
@@ -141,18 +142,17 @@ class GritTransformerLayer(nn.Module):
         Returns:
             x_out, e_out
         """
-        x_heads = []
-        e_heads = []
+        x_attn = torch.zeros_like(x)
+        B_size, N_max = mask.shape
+        e_attn = torch.zeros(B_size, N_max, N_max, self.hidden_dim, device=x.device)
         attn_all = []
 
         for head in self.heads:
             x_h, e_h, attn_h = head(x, e, batch, mask)
-            x_heads.append(x_h)
-            e_heads.append(e_h)
+            x_attn = x_attn + x_h
+            e_attn = e_attn + e_h
             attn_all.append(attn_h)
-
-        x_attn = sum(x_heads)
-        e_attn = sum(e_heads)
+            del x_h, e_h
 
         log_deg = torch.log(1.0 + deg).unsqueeze(-1)
         x_attn = x_attn * self.deg_scaler_1 + log_deg * x_attn * self.deg_scaler_2
