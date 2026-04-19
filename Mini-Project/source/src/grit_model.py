@@ -16,60 +16,82 @@ def signed_sqrt(x):
     return torch.sqrt(F.relu(x)) - torch.sqrt(F.relu(-x))
 
 
-class GritAttentionHead(nn.Module):
-    """Single GRIT attention head with edge-conditioned attention (Eq. 2)."""
+class GritMultiHeadAttention(nn.Module):
+    """Batched multi-head GRIT attention (Eq. 2-3). Single forward pass for all heads."""
 
-    def __init__(self, hidden_dim, head_dim, attn_dropout=0.0):
+    def __init__(self, hidden_dim, num_heads, attn_dropout=0.0):
         super().__init__()
-        self.head_dim = head_dim
-        self.W_Q = nn.Linear(hidden_dim, head_dim, bias=True)
-        self.W_K = nn.Linear(hidden_dim, head_dim, bias=True)
-        self.W_V = nn.Linear(hidden_dim, head_dim, bias=True)
-        self.W_Ew = nn.Linear(hidden_dim, head_dim, bias=True)
-        self.W_Eb = nn.Linear(hidden_dim, head_dim, bias=True)
-        self.W_Ev = nn.Linear(head_dim, head_dim, bias=True)
-        self.W_A = nn.Linear(head_dim, 1, bias=False)
-        self.W_O = nn.Linear(head_dim, hidden_dim, bias=True)
-        self.W_Eo = nn.Linear(head_dim, hidden_dim, bias=True)
+        self.num_heads = num_heads
+        self.head_dim = hidden_dim // num_heads
+        h = self.head_dim
+
+        self.W_Q = nn.Linear(hidden_dim, hidden_dim, bias=True)
+        self.W_K = nn.Linear(hidden_dim, hidden_dim, bias=True)
+        self.W_V = nn.Linear(hidden_dim, hidden_dim, bias=True)
+        self.W_Ew = nn.Linear(hidden_dim, hidden_dim, bias=True)
+        self.W_Eb = nn.Linear(hidden_dim, hidden_dim, bias=True)
+        self.W_Ev = nn.Linear(hidden_dim, hidden_dim, bias=True)
+        self.W_A = nn.Linear(h, 1, bias=False)
+        self.W_O = nn.Linear(hidden_dim, hidden_dim, bias=True)
+        self.W_Eo = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.attn_dropout = nn.Dropout(attn_dropout)
 
     def forward(self, x_dense, e, node_mask):
         """
         Args:
-            x_dense: (B, N_max, hidden_dim) dense node features
-            e: (B, N_max, N_max, hidden_dim) pairwise features
-            node_mask: (B, N_max) boolean mask
+            x_dense: (B, N, D)
+            e: (B, N, N, D)
+            node_mask: (B, N)
         Returns:
-            x_out: (B, N_max, hidden_dim) updated node features (masked)
-            e_hat: (B, N_max, N_max, head_dim) updated pairwise features
-            attn_weights: (B, N_max, N_max) attention weights
+            x_out: (B, N, D)
+            e_out: (B, N, N, D)
+            attn_weights: (B, H, N, N)
         """
-        q = self.W_Q(x_dense)
-        k = self.W_K(x_dense)
-        v = self.W_V(x_dense)
+        B, N, D = x_dense.shape
+        H = self.num_heads
+        h = self.head_dim
 
-        qk = q.unsqueeze(2) + k.unsqueeze(1)
+        # (B, N, D) -> (B, N, H, h) -> (B, H, N, h)
+        q = self.W_Q(x_dense).reshape(B, N, H, h).permute(0, 2, 1, 3)
+        k = self.W_K(x_dense).reshape(B, N, H, h).permute(0, 2, 1, 3)
+        v = self.W_V(x_dense).reshape(B, N, H, h).permute(0, 2, 1, 3)
+
+        # (B, H, N, 1, h) + (B, H, 1, N, h) -> (B, H, N, N, h)
+        qk = q.unsqueeze(3) + k.unsqueeze(2)
         del q, k
 
-        e_hat = F.relu(signed_sqrt(qk * self.W_Ew(e)) + self.W_Eb(e))
-        del qk
+        # Edge projections: (B, N, N, D) -> (B, N, N, H, h) -> (B, H, N, N, h)
+        e_w = self.W_Ew(e).reshape(B, N, N, H, h).permute(0, 3, 1, 2, 4)
+        e_b = self.W_Eb(e).reshape(B, N, N, H, h).permute(0, 3, 1, 2, 4)
 
+        # e_hat: (B, H, N, N, h)
+        e_hat = F.relu(signed_sqrt(qk * e_w) + e_b)
+        del qk, e_w, e_b
+
+        # Attention logits: (B, H, N, N, h) -> (B, H, N, N)
         attn_logits = self.W_A(e_hat).squeeze(-1)
-        attn_mask = node_mask.unsqueeze(1) & node_mask.unsqueeze(2)
-        attn_logits = attn_logits.masked_fill(~attn_mask, float('-inf'))
+        attn_mask = node_mask.unsqueeze(1) & node_mask.unsqueeze(2)  # (B, N, N)
+        attn_logits = attn_logits.masked_fill(~attn_mask.unsqueeze(1), float('-inf'))
 
         attn_weights = F.softmax(attn_logits, dim=-1)
         del attn_logits
-        attn_weights = attn_weights.masked_fill(~attn_mask, 0.0)
+        attn_weights = attn_weights.masked_fill(~attn_mask.unsqueeze(1), 0.0)
         attn_weights = self.attn_dropout(attn_weights)
 
-        values = v.unsqueeze(1) + self.W_Ev(e_hat)
-        del v
+        # Values: (B, H, 1, N, h) + W_Ev(e_hat) -> (B, H, N, N, h)
+        e_v = self.W_Ev(e_hat)
+        values = v.unsqueeze(2) + e_v
+        del v, e_v
+
+        # Weighted sum: (B, H, N, 1, N) @ (B, H, N, N, h) -> (B, H, N, h)
         x_attn = torch.matmul(attn_weights.unsqueeze(-2), values).squeeze(-2)
         del values
 
-        x_out = self.W_O(x_attn)
-        e_out = self.W_Eo(e_hat)
+        # (B, H, N, h) -> (B, N, H, h) -> (B, N, D)
+        x_out = self.W_O(x_attn.permute(0, 2, 1, 3).reshape(B, N, D))
+
+        # e_hat: (B, H, N, N, h) -> (B, N, N, H, h) -> (B, N, N, D)
+        e_out = self.W_Eo(e_hat.permute(0, 2, 3, 1, 4).reshape(B, N, N, D))
         del e_hat
 
         return x_out, e_out, attn_weights
@@ -82,12 +104,8 @@ class GritTransformerLayer(nn.Module):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
-        self.head_dim = hidden_dim // num_heads
 
-        self.heads = nn.ModuleList([
-            GritAttentionHead(hidden_dim, self.head_dim, attn_dropout)
-            for _ in range(num_heads)
-        ])
+        self.mha = GritMultiHeadAttention(hidden_dim, num_heads, attn_dropout)
 
         self.deg_scaler_1 = nn.Parameter(torch.ones(hidden_dim))
         self.deg_scaler_2 = nn.Parameter(torch.zeros(hidden_dim))
@@ -107,55 +125,32 @@ class GritTransformerLayer(nn.Module):
     def forward(self, x_dense, e, node_mask, log_deg_dense):
         """
         Args:
-            x_dense: (B, N_max, hidden_dim) dense node features
-            e: (B, N_max, N_max, hidden_dim) pairwise features
-            node_mask: (B, N_max) valid node mask
-            log_deg_dense: (B, N_max, 1) log(1 + degree) for each node
-        Returns:
-            x_out, e_out (same shapes)
+            x_dense: (B, N, D)
+            e: (B, N, N, D)
+            node_mask: (B, N)
+            log_deg_dense: (B, N, 1)
         """
-        B, N_max, D = x_dense.shape
+        B, N, D = x_dense.shape
 
-        x_attn = torch.zeros_like(x_dense)
-        e_attn = torch.zeros_like(e)
-        attn_all = []
-
-        for head in self.heads:
-            x_h, e_h, attn_h = head(x_dense, e, node_mask)
-            x_attn = x_attn + x_h
-            e_attn = e_attn + e_h
-            attn_all.append(attn_h)
-            del x_h, e_h
+        x_attn, e_attn, attn_weights = self.mha(x_dense, e, node_mask)
 
         x_attn = x_attn * self.deg_scaler_1 + log_deg_dense * x_attn * self.deg_scaler_2
-
-        # BN: reshape to (B*N_max, D), apply BN, reshape back.
-        # Padded positions are zero and stay zero after residual.
-        x_attn_r = x_attn.reshape(-1, D)
-        x_dense = x_dense + self.bn_node_attn(x_attn_r).reshape(B, N_max, D)
+        x_dense = x_dense + self.bn_node_attn(x_attn.reshape(-1, D)).reshape(B, N, D)
         del x_attn
 
-        # Edge BN: reshape to (B*N_max*N_max, D)
-        e_attn_r = e_attn.reshape(-1, D)
-        e = e + self.bn_edge(e_attn_r).reshape(B, N_max, N_max, D)
+        e = e + self.bn_edge(e_attn.reshape(-1, D)).reshape(B, N, N, D)
         del e_attn
 
-        # FFN
         x_ffn = self.ffn(x_dense.reshape(-1, D))
-        x_dense = x_dense + self.bn_node_ffn(x_ffn).reshape(B, N_max, D)
+        x_dense = x_dense + self.bn_node_ffn(x_ffn).reshape(B, N, D)
 
-        self._attn_weights = attn_all
+        self._attn_weights = attn_weights
 
         return x_dense, e
 
 
 class InstrumentedGRIT(nn.Module):
-    """GRIT model instrumented for attention sink experiments.
-
-    Args:
-        config: dict with model, architecture, pe, data sections
-        dataset_info: dict from datasets.py
-    """
+    """GRIT model instrumented for attention sink experiments."""
 
     def __init__(self, config, dataset_info):
         super().__init__()
@@ -213,7 +208,6 @@ class InstrumentedGRIT(nn.Module):
         edge_attr = batch_data.edge_attr
         batch = batch_data.batch
 
-        # Node embedding
         if self.input_type == 'categorical':
             x = self.node_emb(x.squeeze(-1))
         else:
@@ -223,18 +217,14 @@ class InstrumentedGRIT(nn.Module):
                 x = x.unsqueeze(-1)
             x = self.node_emb(x)
 
-        # Add RRWP node PE
         if hasattr(batch_data, 'rrwp_node') and batch_data.rrwp_node is not None:
             x = x + self.pe_node_enc(batch_data.rrwp_node)
 
-        # Convert nodes to dense: (B, N_max, D)
         x_dense, node_mask = to_dense_batch(x, batch)
         B, N_max, D = x_dense.shape
 
-        # Build dense pairwise tensor: (B, N_max, N_max, D)
         e_dense = torch.zeros(B, N_max, N_max, self.hidden_dim, device=x.device)
 
-        # Embed and scatter edge attributes
         if edge_attr is not None:
             if self.input_type == 'categorical':
                 ea = self.edge_emb(edge_attr.squeeze(-1))
@@ -245,7 +235,6 @@ class InstrumentedGRIT(nn.Module):
                     edge_attr = edge_attr.unsqueeze(-1)
                 ea = self.edge_emb(edge_attr)
 
-            # Vectorised scatter: compute batch-local indices
             src_global, dst_global = edge_index[0], edge_index[1]
             edge_batch = batch[src_global]
             _, counts = torch.unique_consecutive(batch, return_counts=True)
@@ -255,7 +244,6 @@ class InstrumentedGRIT(nn.Module):
             dst_local = dst_global - offsets[edge_batch]
             e_dense[edge_batch, src_local, dst_local] = ea
 
-        # Add RRWP edge PE — once per forward pass, B is small
         if hasattr(batch_data, 'rrwp_edge') and batch_data.rrwp_edge is not None:
             rrwp_pe = self.pe_edge_enc(batch_data.rrwp_edge)
             _, counts = torch.unique_consecutive(batch, return_counts=True)
@@ -265,7 +253,6 @@ class InstrumentedGRIT(nn.Module):
                 e_dense[b_idx, :n, :n] = e_dense[b_idx, :n, :n] + rrwp_pe[offset:offset + n * n].reshape(n, n, self.hidden_dim)
                 offset += n * n
 
-        # Precompute log degree in dense format
         deg = degree(edge_index[0], num_nodes=x.size(0)).float()
         log_deg = torch.log(1.0 + deg)
         log_deg_dense, _ = to_dense_batch(log_deg.unsqueeze(-1), batch)
@@ -279,10 +266,8 @@ class InstrumentedGRIT(nn.Module):
             if collect_diagnostics:
                 x_flat = x_dense[node_mask]
                 self.layer_data.append({'h': x_flat.detach().cpu(), 'batch': batch.detach().cpu()})
-                per_head_attn = torch.stack(layer._attn_weights, dim=1)
-                self.attn_weights.append(per_head_attn.detach().cpu())
+                self.attn_weights.append(layer._attn_weights.detach().cpu())
 
-        # Back to sparse for pooling
         x_flat = x_dense[node_mask]
 
         if self.task == 'node_classification':
