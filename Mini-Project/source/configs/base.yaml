@@ -22,7 +22,7 @@ architecture:
   task: multilabel_classification
 
 training:
-  epochs: 200
+  epochs: 150
   warmup_epochs: 5
   lr: 0.0003
   weight_decay: 0.0
