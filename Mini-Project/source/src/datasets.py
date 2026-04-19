@@ -199,8 +199,8 @@ def get_datasets(config):
     info = DATASET_INFO[dataset_name].copy()
     vnode_cfg = config.get('vnode', {})
     if vnode_cfg.get('enabled', False) and info.get('num_node_types') is not None:
-        info['num_node_types'] = vnode_cfg['num_node_types']
-        info['num_edge_types'] = vnode_cfg['num_edge_types']
+        info['num_node_types'] = info['num_node_types'] + 1
+        info['num_edge_types'] = info['num_edge_types'] + 1
 
     return datasets['train'], datasets['val'], datasets['test'], info
 
