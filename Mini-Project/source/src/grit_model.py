@@ -129,33 +129,20 @@ class GritTransformerLayer(nn.Module):
 
         x_attn = x_attn * self.deg_scaler_1 + log_deg_dense * x_attn * self.deg_scaler_2
 
-        # BN on valid nodes only: flatten to (total_nodes, D)
-        x_attn_flat = x_attn[node_mask]
-        x_attn_flat = self.bn_node_attn(x_attn_flat)
-        x_bn = torch.zeros_like(x_attn)
-        x_bn[node_mask] = x_attn_flat
-        x_dense = x_dense + x_bn
-        del x_attn, x_bn
+        # BN: reshape to (B*N_max, D), apply BN, reshape back.
+        # Padded positions are zero and stay zero after residual.
+        x_attn_r = x_attn.reshape(-1, D)
+        x_dense = x_dense + self.bn_node_attn(x_attn_r).reshape(B, N_max, D)
+        del x_attn
 
-        # BN on valid edges
-        e_pair_mask = node_mask.unsqueeze(1) & node_mask.unsqueeze(2)
-        e_attn_flat = e_attn[e_pair_mask]
-        if e_attn_flat.shape[0] > 0:
-            e_attn_flat = self.bn_edge(e_attn_flat)
-            e_bn = torch.zeros_like(e_attn)
-            e_bn[e_pair_mask] = e_attn_flat
-            e = e + e_bn
-            del e_bn
-        else:
-            e = e + e_attn
+        # Edge BN: reshape to (B*N_max*N_max, D)
+        e_attn_r = e_attn.reshape(-1, D)
+        e = e + self.bn_edge(e_attn_r).reshape(B, N_max, N_max, D)
         del e_attn
 
-        # FFN on valid nodes
-        x_ffn_flat = self.ffn(x_dense[node_mask])
-        x_ffn_flat = self.bn_node_ffn(x_ffn_flat)
-        x_ffn = torch.zeros_like(x_dense)
-        x_ffn[node_mask] = x_ffn_flat
-        x_dense = x_dense + x_ffn
+        # FFN
+        x_ffn = self.ffn(x_dense.reshape(-1, D))
+        x_dense = x_dense + self.bn_node_ffn(x_ffn).reshape(B, N_max, D)
 
         self._attn_weights = attn_all
 
@@ -268,14 +255,14 @@ class InstrumentedGRIT(nn.Module):
             dst_local = dst_global - offsets[edge_batch]
             e_dense[edge_batch, src_local, dst_local] = ea
 
-        # Add RRWP edge PE
+        # Add RRWP edge PE — once per forward pass, B is small
         if hasattr(batch_data, 'rrwp_edge') and batch_data.rrwp_edge is not None:
             rrwp_pe = self.pe_edge_enc(batch_data.rrwp_edge)
             _, counts = torch.unique_consecutive(batch, return_counts=True)
             offset = 0
             for b_idx in range(B):
                 n = counts[b_idx].item()
-                e_dense[b_idx, :n, :n] += rrwp_pe[offset:offset + n * n].reshape(n, n, self.hidden_dim)
+                e_dense[b_idx, :n, :n] = e_dense[b_idx, :n, :n] + rrwp_pe[offset:offset + n * n].reshape(n, n, self.hidden_dim)
                 offset += n * n
 
         # Precompute log degree in dense format
