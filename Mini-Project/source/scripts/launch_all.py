@@ -32,7 +32,12 @@ DATASET_CONFIGS = [
     "pascal_grit_vnode",
 ]
 
-ALL_CONFIGS = QUARTILE_CONFIGS + DATASET_CONFIGS
+ZINC_CONFIGS = [
+    "zinc_grit",
+    "zinc_grit_vnode",
+]
+
+ALL_CONFIGS = QUARTILE_CONFIGS + DATASET_CONFIGS + ZINC_CONFIGS
 
 
 def get_num_gpus():
@@ -71,6 +76,7 @@ def main():
     parser.add_argument("--all", action="store_true", help="Run all 8 experiments")
     parser.add_argument("--quartiles", action="store_true", help="Run 4 quartile experiments (instance 1)")
     parser.add_argument("--datasets", action="store_true", help="Run 4 dataset experiments (instance 2)")
+    parser.add_argument("--zinc", action="store_true", help="Run 2 ZINC experiments")
     parser.add_argument("--configs", nargs="+", help="Specific config names to run")
     parser.add_argument("--no-wandb", action="store_true", help="Disable wandb")
     parser.add_argument("--max-gpus", type=int, default=None, help="Limit GPUs")
@@ -82,6 +88,8 @@ def main():
         config_names = QUARTILE_CONFIGS
     elif args.datasets:
         config_names = DATASET_CONFIGS
+    elif args.zinc:
+        config_names = ZINC_CONFIGS
     elif args.all:
         config_names = ALL_CONFIGS
     else:
