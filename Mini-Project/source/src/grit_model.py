@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import global_mean_pool, global_add_pool
-from torch_geometric.utils import degree
+from torch_geometric.utils import degree, to_dense_batch
 
 
 def signed_sqrt(x):
@@ -33,31 +33,23 @@ class GritAttentionHead(nn.Module):
         self.W_Eo = nn.Linear(head_dim, hidden_dim, bias=True)
         self.attn_dropout = nn.Dropout(attn_dropout)
 
-    def forward(self, x, e, batch, mask):
+    def forward(self, x_dense, e, node_mask):
         """
         Args:
-            x: (N, hidden_dim) node features
-            e: (N, N_max, hidden_dim) pairwise features (padded)
-            batch: (N,) batch assignment
-            mask: (B, N_max) boolean mask for valid nodes in the padded representation
+            x_dense: (B, N_max, hidden_dim) dense node features
+            e: (B, N_max, N_max, hidden_dim) pairwise features
+            node_mask: (B, N_max) boolean mask
         Returns:
-            x_out: (N, hidden_dim) updated node features
+            x_out: (B, N_max, hidden_dim) updated node features (masked)
             e_hat: (B, N_max, N_max, head_dim) updated pairwise features
+            attn_weights: (B, N_max, N_max) attention weights
         """
-        B = batch.max().item() + 1
-        N_max = mask.shape[1]
+        q = self.W_Q(x_dense)
+        k = self.W_K(x_dense)
+        v = self.W_V(x_dense)
 
-        q = self.W_Q(x)
-        k = self.W_K(x)
-        v = self.W_V(x)
-
-        x_dense, node_mask = _to_dense(x, batch, N_max)
-        q_dense, _ = _to_dense(q, batch, N_max)
-        k_dense, _ = _to_dense(k, batch, N_max)
-        v_dense, _ = _to_dense(v, batch, N_max)
-
-        qk = q_dense.unsqueeze(2) + k_dense.unsqueeze(1)
-        del q_dense, k_dense
+        qk = q.unsqueeze(2) + k.unsqueeze(1)
+        del q, k
 
         e_hat = F.relu(signed_sqrt(qk * self.W_Ew(e)) + self.W_Eb(e))
         del qk
@@ -71,35 +63,16 @@ class GritAttentionHead(nn.Module):
         attn_weights = attn_weights.masked_fill(~attn_mask, 0.0)
         attn_weights = self.attn_dropout(attn_weights)
 
-        values = v_dense.unsqueeze(1) + self.W_Ev(e_hat)
-        del v_dense
+        values = v.unsqueeze(1) + self.W_Ev(e_hat)
+        del v
         x_attn = torch.matmul(attn_weights.unsqueeze(-2), values).squeeze(-2)
         del values
 
-        x_attn_flat = x_attn[node_mask]
-        x_out = self.W_O(x_attn_flat)
-        e_out_dense = self.W_Eo(e_hat)
+        x_out = self.W_O(x_attn)
+        e_out = self.W_Eo(e_hat)
         del e_hat
 
-        return x_out, e_out_dense, attn_weights
-
-
-def _to_dense(x, batch, N_max):
-    """Convert sparse node features to dense (B, N_max, D) with mask."""
-    B = batch.max().item() + 1
-    D = x.shape[1]
-    dense = torch.zeros(B, N_max, D, device=x.device, dtype=x.dtype)
-    mask = torch.zeros(B, N_max, dtype=torch.bool, device=x.device)
-
-    _, counts = torch.unique(batch, return_counts=True)
-    offset = 0
-    for b in range(B):
-        n = counts[b].item()
-        dense[b, :n] = x[offset:offset + n]
-        mask[b, :n] = True
-        offset += n
-
-    return dense, mask
+        return x_out, e_out, attn_weights
 
 
 class GritTransformerLayer(nn.Module):
@@ -131,51 +104,62 @@ class GritTransformerLayer(nn.Module):
         )
         self.bn_node_ffn = nn.BatchNorm1d(hidden_dim)
 
-    def forward(self, x, e, batch, mask, deg):
+    def forward(self, x_dense, e, node_mask, log_deg_dense):
         """
         Args:
-            x: (N, hidden_dim)
+            x_dense: (B, N_max, hidden_dim) dense node features
             e: (B, N_max, N_max, hidden_dim) pairwise features
-            batch: (N,)
-            mask: (B, N_max) valid node mask
-            deg: (N,) node degrees
+            node_mask: (B, N_max) valid node mask
+            log_deg_dense: (B, N_max, 1) log(1 + degree) for each node
         Returns:
-            x_out, e_out
+            x_out, e_out (same shapes)
         """
-        x_attn = torch.zeros_like(x)
-        B_size, N_max = mask.shape
-        e_attn = torch.zeros(B_size, N_max, N_max, self.hidden_dim, device=x.device)
+        B, N_max, D = x_dense.shape
+
+        x_attn = torch.zeros_like(x_dense)
+        e_attn = torch.zeros_like(e)
         attn_all = []
 
         for head in self.heads:
-            x_h, e_h, attn_h = head(x, e, batch, mask)
+            x_h, e_h, attn_h = head(x_dense, e, node_mask)
             x_attn = x_attn + x_h
             e_attn = e_attn + e_h
             attn_all.append(attn_h)
             del x_h, e_h
 
-        log_deg = torch.log(1.0 + deg).unsqueeze(-1)
-        x_attn = x_attn * self.deg_scaler_1 + log_deg * x_attn * self.deg_scaler_2
+        x_attn = x_attn * self.deg_scaler_1 + log_deg_dense * x_attn * self.deg_scaler_2
 
-        x = x + self.bn_node_attn(x_attn)
+        # BN on valid nodes only: flatten to (total_nodes, D)
+        x_attn_flat = x_attn[node_mask]
+        x_attn_flat = self.bn_node_attn(x_attn_flat)
+        x_bn = torch.zeros_like(x_attn)
+        x_bn[node_mask] = x_attn_flat
+        x_dense = x_dense + x_bn
+        del x_attn, x_bn
 
-        B, N_max = mask.shape
-        e_flat = e_attn.reshape(-1, self.hidden_dim)
-        e_mask_flat = (mask.unsqueeze(1) & mask.unsqueeze(2)).reshape(-1)
-        valid_e = e_flat[e_mask_flat]
-        if valid_e.shape[0] > 0:
-            valid_e_normed = self.bn_edge(valid_e)
-            e_normed = torch.zeros_like(e_flat)
-            e_normed[e_mask_flat] = valid_e_normed
-            e = e + e_normed.reshape(B, N_max, N_max, self.hidden_dim)
+        # BN on valid edges
+        e_pair_mask = node_mask.unsqueeze(1) & node_mask.unsqueeze(2)
+        e_attn_flat = e_attn[e_pair_mask]
+        if e_attn_flat.shape[0] > 0:
+            e_attn_flat = self.bn_edge(e_attn_flat)
+            e_bn = torch.zeros_like(e_attn)
+            e_bn[e_pair_mask] = e_attn_flat
+            e = e + e_bn
+            del e_bn
         else:
             e = e + e_attn
+        del e_attn
 
-        x = x + self.bn_node_ffn(self.ffn(x))
+        # FFN on valid nodes
+        x_ffn_flat = self.ffn(x_dense[node_mask])
+        x_ffn_flat = self.bn_node_ffn(x_ffn_flat)
+        x_ffn = torch.zeros_like(x_dense)
+        x_ffn[node_mask] = x_ffn_flat
+        x_dense = x_dense + x_ffn
 
         self._attn_weights = attn_all
 
-        return x, e
+        return x_dense, e
 
 
 class InstrumentedGRIT(nn.Module):
@@ -242,6 +226,7 @@ class InstrumentedGRIT(nn.Module):
         edge_attr = batch_data.edge_attr
         batch = batch_data.batch
 
+        # Node embedding
         if self.input_type == 'categorical':
             x = self.node_emb(x.squeeze(-1))
         else:
@@ -251,15 +236,18 @@ class InstrumentedGRIT(nn.Module):
                 x = x.unsqueeze(-1)
             x = self.node_emb(x)
 
+        # Add RRWP node PE
         if hasattr(batch_data, 'rrwp_node') and batch_data.rrwp_node is not None:
             x = x + self.pe_node_enc(batch_data.rrwp_node)
 
-        B = batch.max().item() + 1
-        _, counts = torch.unique(batch, return_counts=True)
-        N_max = counts.max().item()
+        # Convert nodes to dense: (B, N_max, D)
+        x_dense, node_mask = to_dense_batch(x, batch)
+        B, N_max, D = x_dense.shape
 
+        # Build dense pairwise tensor: (B, N_max, N_max, D)
         e_dense = torch.zeros(B, N_max, N_max, self.hidden_dim, device=x.device)
 
+        # Embed and scatter edge attributes
         if edge_attr is not None:
             if self.input_type == 'categorical':
                 ea = self.edge_emb(edge_attr.squeeze(-1))
@@ -270,51 +258,53 @@ class InstrumentedGRIT(nn.Module):
                     edge_attr = edge_attr.unsqueeze(-1)
                 ea = self.edge_emb(edge_attr)
 
-            offset = 0
-            for b_idx in range(B):
-                n = counts[b_idx].item()
-                graph_mask = (batch[edge_index[0]] == b_idx)
-                src_local = edge_index[0, graph_mask] - offset
-                dst_local = edge_index[1, graph_mask] - offset
-                e_dense[b_idx, src_local, dst_local] = ea[graph_mask]
-                offset += n
+            # Vectorised scatter: compute batch-local indices
+            src_global, dst_global = edge_index[0], edge_index[1]
+            edge_batch = batch[src_global]
+            _, counts = torch.unique_consecutive(batch, return_counts=True)
+            offsets = torch.zeros(B, device=batch.device, dtype=torch.long)
+            offsets[1:] = counts.cumsum(0)[:-1]
+            src_local = src_global - offsets[edge_batch]
+            dst_local = dst_global - offsets[edge_batch]
+            e_dense[edge_batch, src_local, dst_local] = ea
 
+        # Add RRWP edge PE
         if hasattr(batch_data, 'rrwp_edge') and batch_data.rrwp_edge is not None:
             rrwp_pe = self.pe_edge_enc(batch_data.rrwp_edge)
+            _, counts = torch.unique_consecutive(batch, return_counts=True)
             offset = 0
             for b_idx in range(B):
                 n = counts[b_idx].item()
-                pe_graph = rrwp_pe[offset:offset + n * n].reshape(n, n, self.hidden_dim)
-                e_dense[b_idx, :n, :n] = e_dense[b_idx, :n, :n] + pe_graph
+                e_dense[b_idx, :n, :n] += rrwp_pe[offset:offset + n * n].reshape(n, n, self.hidden_dim)
                 offset += n * n
 
-        mask = torch.zeros(B, N_max, dtype=torch.bool, device=x.device)
-        offset = 0
-        for b_idx in range(B):
-            n = counts[b_idx].item()
-            mask[b_idx, :n] = True
-            offset += n
-
+        # Precompute log degree in dense format
         deg = degree(edge_index[0], num_nodes=x.size(0)).float()
+        log_deg = torch.log(1.0 + deg)
+        log_deg_dense, _ = to_dense_batch(log_deg.unsqueeze(-1), batch)
 
         if collect_diagnostics:
             self.layer_data = [{'h': x.detach().cpu(), 'batch': batch.detach().cpu()}]
             self.attn_weights = []
 
         for layer_idx, layer in enumerate(self.layers):
-            x, e_dense = layer(x, e_dense, batch, mask, deg)
+            x_dense, e_dense = layer(x_dense, e_dense, node_mask, log_deg_dense)
             if collect_diagnostics:
-                self.layer_data.append({'h': x.detach().cpu(), 'batch': batch.detach().cpu()})
+                x_flat = x_dense[node_mask]
+                self.layer_data.append({'h': x_flat.detach().cpu(), 'batch': batch.detach().cpu()})
                 per_head_attn = torch.stack(layer._attn_weights, dim=1)
                 self.attn_weights.append(per_head_attn.detach().cpu())
 
+        # Back to sparse for pooling
+        x_flat = x_dense[node_mask]
+
         if self.task == 'node_classification':
-            return self.output_head(x)
+            return self.output_head(x_flat)
         else:
             if self.pool == 'sum':
-                graph_emb = global_add_pool(x, batch)
+                graph_emb = global_add_pool(x_flat, batch)
             else:
-                graph_emb = global_mean_pool(x, batch)
+                graph_emb = global_mean_pool(x_flat, batch)
             out = self.output_head(graph_emb)
             if self.task == 'regression':
                 return out.squeeze(-1)
