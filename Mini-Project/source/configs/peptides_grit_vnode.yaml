@@ -1,5 +1,10 @@
 experiment_id: peptides-grit-vnode
 
+data:
+  node_count_filter:
+    min_nodes: 0
+    max_nodes: 300
+
 vnode:
   enabled: true
   vnode_node_type: 0
