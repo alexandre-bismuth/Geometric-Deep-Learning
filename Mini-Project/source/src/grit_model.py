@@ -28,9 +28,8 @@ class GritMultiHeadAttention(nn.Module):
         self.W_Q = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.W_K = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.W_V = nn.Linear(hidden_dim, hidden_dim, bias=True)
-        self.W_Ew = nn.Linear(hidden_dim, hidden_dim, bias=True)
-        self.W_Eb = nn.Linear(hidden_dim, hidden_dim, bias=True)
-        self.W_Ev = nn.Linear(hidden_dim, hidden_dim, bias=True)
+        self.W_E = nn.Linear(hidden_dim, hidden_dim * 2, bias=True)
+        self.W_VeRow = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.W_A = nn.Linear(h, 1, bias=False)
         self.W_O = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.W_Eo = nn.Linear(hidden_dim, hidden_dim, bias=True)
@@ -60,17 +59,22 @@ class GritMultiHeadAttention(nn.Module):
         qk = q.unsqueeze(3) + k.unsqueeze(2)
         del q, k
 
-        # Edge projections: (B, N, N, D) -> (B, N, N, H, h) -> (B, H, N, N, h)
-        e_w = self.W_Ew(e).reshape(B, N, N, H, h).permute(0, 3, 1, 2, 4)
-        e_b = self.W_Eb(e).reshape(B, N, N, H, h).permute(0, 3, 1, 2, 4)
+        # Single edge projection split into Ew and Eb (matches official repo)
+        e_proj = self.W_E(e).reshape(B, N, N, H, h * 2).permute(0, 3, 1, 2, 4)
+        e_w = e_proj[..., :h]
+        e_b = e_proj[..., h:]
+        del e_proj
 
-        # e_hat: (B, H, N, N, h)
-        e_hat = F.relu(signed_sqrt(qk * e_w) + e_b)
+        # e_hat: signed_sqrt((Q+K)*Ew) + Eb, then ReLU (Eq. 2)
+        score = signed_sqrt(qk * e_w) + e_b
         del qk, e_w, e_b
+        score = torch.clamp(score, -5.0, 5.0)
+        e_hat = F.relu(score)
+        del score
 
         # Attention logits: (B, H, N, N, h) -> (B, H, N, N)
         attn_logits = self.W_A(e_hat).squeeze(-1)
-        attn_mask = node_mask.unsqueeze(1) & node_mask.unsqueeze(2)  # (B, N, N)
+        attn_mask = node_mask.unsqueeze(1) & node_mask.unsqueeze(2)
         attn_logits = attn_logits.masked_fill(~attn_mask.unsqueeze(1), float('-inf'))
 
         attn_weights = F.softmax(attn_logits, dim=-1)
@@ -78,19 +82,21 @@ class GritMultiHeadAttention(nn.Module):
         attn_weights = attn_weights.masked_fill(~attn_mask.unsqueeze(1), 0.0)
         attn_weights = self.attn_dropout(attn_weights)
 
-        # Values: (B, H, 1, N, h) + W_Ev(e_hat) -> (B, H, N, N, h)
-        e_v = self.W_Ev(e_hat)
-        values = v.unsqueeze(2) + e_v
-        del v, e_v
+        # Node aggregation: V_j + VeRow(sum_j attn * e_hat) (matches official)
+        # Standard value aggregation
+        x_V = torch.matmul(attn_weights.unsqueeze(-2), v.unsqueeze(2)).squeeze(-2)
+        del v
+        # Edge-enhance: scatter attn-weighted e_hat, then project with VeRow
+        e_weighted = attn_weights.unsqueeze(-1) * e_hat  # (B, H, N, N, h)
+        e_sum = e_weighted.sum(dim=3)  # (B, H, N, h) — sum over source nodes
+        del e_weighted
+        x_attn = x_V + self.W_VeRow(e_sum.permute(0, 2, 1, 3).reshape(B, N, D)).reshape(B, N, H, h).permute(0, 2, 1, 3)
+        del x_V, e_sum
 
-        # Weighted sum: (B, H, N, 1, N) @ (B, H, N, N, h) -> (B, H, N, h)
-        x_attn = torch.matmul(attn_weights.unsqueeze(-2), values).squeeze(-2)
-        del values
-
-        # (B, H, N, h) -> (B, N, H, h) -> (B, N, D)
+        # (B, H, N, h) -> (B, N, D)
         x_out = self.W_O(x_attn.permute(0, 2, 1, 3).reshape(B, N, D))
 
-        # e_hat: (B, H, N, N, h) -> (B, N, N, H, h) -> (B, N, N, D)
+        # Edge output: (B, H, N, N, h) -> (B, N, N, D)
         e_out = self.W_Eo(e_hat.permute(0, 2, 3, 1, 4).reshape(B, N, N, D))
         del e_hat
 
@@ -118,7 +124,6 @@ class GritTransformerLayer(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.Dropout(dropout),
         )
         self.bn_node_ffn = nn.BatchNorm1d(hidden_dim)
 
