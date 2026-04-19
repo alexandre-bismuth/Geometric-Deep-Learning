@@ -2,10 +2,14 @@
 
 Key transform: AddVirtualNode — adds a virtual node connected to all real nodes,
 so it participates in GPSConv's global attention (via to_dense_batch).
+
+AddRRWP — computes Relative Random Walk Probabilities for GRIT (Ma et al., 2023).
 """
 
 import torch
+import numpy as np
 from torch_geometric.transforms import BaseTransform
+from torch_geometric.utils import to_scipy_sparse_matrix, degree as pyg_degree
 
 
 class AddVirtualNode(BaseTransform):
@@ -38,6 +42,19 @@ class AddVirtualNode(BaseTransform):
                 if pe.dim() == 2 and pe.size(0) == num_nodes:
                     pad = torch.zeros(1, pe.size(1), device=pe.device, dtype=pe.dtype)
                     data[pe_attr] = torch.cat([pe, pad], dim=0)
+
+        # --- Pad RRWP tensors for GRIT compatibility ---
+        if hasattr(data, 'rrwp_node') and data.rrwp_node is not None:
+            pe = data.rrwp_node
+            if pe.size(0) == num_nodes:
+                data.rrwp_node = torch.cat([pe, torch.zeros(1, pe.size(1), device=pe.device, dtype=pe.dtype)], dim=0)
+        if hasattr(data, 'rrwp_edge') and data.rrwp_edge is not None:
+            K = data.rrwp_node.size(1) if hasattr(data, 'rrwp_node') else data.rrwp_edge.size(1)
+            n_new = num_nodes + 1
+            old = data.rrwp_edge.reshape(num_nodes, num_nodes, K)
+            new_rrwp = torch.zeros(n_new, n_new, K, device=old.device, dtype=old.dtype)
+            new_rrwp[:num_nodes, :num_nodes, :] = old
+            data.rrwp_edge = new_rrwp.reshape(n_new * n_new, K)
 
         # --- Node features ---
         if data.x is not None:
@@ -123,3 +140,57 @@ class SafeLaplacianPE(BaseTransform):
 
     def __repr__(self):
         return f'{self.__class__.__name__}(k={self.k})'
+
+
+class AddRRWP(BaseTransform):
+    """Compute Relative Random Walk Probabilities (Ma et al., ICML 2023).
+
+    For each pair (i,j), computes P_{i,j} = [I, M, M^2, ..., M^{K-1}]_{i,j}
+    where M = D^{-1}A is the random walk transition matrix.
+
+    Stores:
+        - data.rrwp_node: (n, K) diagonal entries (RWSE-like node PE)
+        - data.rrwp_edge: (n*n, K) flattened pairwise entries for dense attention
+    """
+
+    def __init__(self, walk_length=17):
+        self.walk_length = walk_length
+
+    def forward(self, data):
+        n = data.num_nodes
+        K = self.walk_length
+        device = data.edge_index.device
+
+        if n == 0:
+            data.rrwp_node = torch.zeros(0, K)
+            data.rrwp_edge = torch.zeros(0, K)
+            return data
+
+        A = to_scipy_sparse_matrix(data.edge_index, num_nodes=n)
+        deg = np.array(A.sum(axis=1)).flatten()
+        deg_inv = np.zeros_like(deg)
+        nonzero = deg > 0
+        deg_inv[nonzero] = 1.0 / deg[nonzero]
+
+        from scipy import sparse
+        D_inv = sparse.diags(deg_inv)
+        M = D_inv @ A
+
+        rrwp_dense = np.zeros((n, n, K), dtype=np.float32)
+        Mk = sparse.eye(n, format='csr')
+        for k in range(K):
+            Mk_dense = Mk.toarray() if sparse.issparse(Mk) else Mk
+            rrwp_dense[:, :, k] = Mk_dense
+            if k < K - 1:
+                Mk = Mk @ M
+
+        rrwp_node = torch.from_numpy(np.diagonal(rrwp_dense, axis1=0, axis2=1).T.copy())
+        rrwp_edge = torch.from_numpy(rrwp_dense.reshape(n * n, K).copy())
+
+        data.rrwp_node = rrwp_node.float()
+        data.rrwp_edge = rrwp_edge.float()
+
+        return data
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(walk_length={self.walk_length})'

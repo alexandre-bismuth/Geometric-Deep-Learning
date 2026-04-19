@@ -1,0 +1,6 @@
+experiment_id: peptides-grit-vnode
+
+vnode:
+  enabled: true
+  vnode_node_type: 0
+  vnode_edge_type: 0

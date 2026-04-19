@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Launch all experiments in parallel across available GPUs.
+"""Launch GRIT experiments in parallel across available GPUs.
 
 Usage:
-    python scripts/launch_all.py --all
-    python scripts/launch_all.py --zinc-only
-    python scripts/launch_all.py --configs zinc_B1 zinc_A1
+    python scripts/launch_all.py --quartiles     # Instance 1: 4 quartile experiments
+    python scripts/launch_all.py --datasets       # Instance 2: 4 dataset experiments
+    python scripts/launch_all.py --all            # All 8
+    python scripts/launch_all.py --configs peptides_grit peptides_grit_q1
 """
 
 import argparse
@@ -17,15 +18,24 @@ from collections import deque
 
 CONFIGS_DIR = Path("configs")
 
-ZINC_CONFIGS = ["zinc_vnode", "zinc_novnode"]
-MNIST_CONFIGS = ["mnist_vnode", "mnist_novnode"]
-PEPTIDES_CONFIGS = ["peptides_vnode", "peptides_novnode"]
-PASCAL_CONFIGS = ["pascal_vnode", "pascal_novnode", "pascal_novnode_3L", "pascal_novnode_8L"]
-ALL_CONFIGS = ZINC_CONFIGS + MNIST_CONFIGS + PEPTIDES_CONFIGS + PASCAL_CONFIGS
+QUARTILE_CONFIGS = [
+    "peptides_grit_q1",
+    "peptides_grit_q2",
+    "peptides_grit_q3",
+    "peptides_grit_q4",
+]
+
+DATASET_CONFIGS = [
+    "peptides_grit",
+    "peptides_grit_vnode",
+    "pascal_grit",
+    "pascal_grit_vnode",
+]
+
+ALL_CONFIGS = QUARTILE_CONFIGS + DATASET_CONFIGS
 
 
 def get_num_gpus():
-    """Detect number of available GPUs."""
     try:
         result = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True)
         if result.returncode == 0:
@@ -37,7 +47,6 @@ def get_num_gpus():
 
 
 def launch_experiment(config_name, gpu_id, log_dir, extra_args=None):
-    """Launch a single experiment on a specific GPU."""
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
@@ -58,42 +67,34 @@ def launch_experiment(config_name, gpu_id, log_dir, extra_args=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Launch experiments in parallel across GPUs")
-    parser.add_argument("--all", action="store_true", help="Run all 12 experiments")
-    parser.add_argument("--zinc-only", action="store_true", help="Run only ZINC experiments")
-    parser.add_argument("--mnist-only", action="store_true", help="Run only MNIST-SP experiments")
-    parser.add_argument("--peptides-only", action="store_true", help="Run only Peptides experiments")
-    parser.add_argument("--pascal-only", action="store_true", help="Run only PascalVOC experiments")
+    parser = argparse.ArgumentParser(description="Launch GRIT experiments across GPUs")
+    parser.add_argument("--all", action="store_true", help="Run all 8 experiments")
+    parser.add_argument("--quartiles", action="store_true", help="Run 4 quartile experiments (instance 1)")
+    parser.add_argument("--datasets", action="store_true", help="Run 4 dataset experiments (instance 2)")
     parser.add_argument("--configs", nargs="+", help="Specific config names to run")
-    parser.add_argument("--no-wandb", action="store_true", help="Disable wandb for all experiments")
-    parser.add_argument("--max-gpus", type=int, default=None, help="Limit number of GPUs to use")
+    parser.add_argument("--no-wandb", action="store_true", help="Disable wandb")
+    parser.add_argument("--max-gpus", type=int, default=None, help="Limit GPUs")
     args = parser.parse_args()
 
-    # Determine which configs to run
     if args.configs:
         config_names = args.configs
-    elif args.zinc_only:
-        config_names = ZINC_CONFIGS
-    elif args.mnist_only:
-        config_names = MNIST_CONFIGS
-    elif args.peptides_only:
-        config_names = PEPTIDES_CONFIGS
-    elif args.pascal_only:
-        config_names = PASCAL_CONFIGS
+    elif args.quartiles:
+        config_names = QUARTILE_CONFIGS
+    elif args.datasets:
+        config_names = DATASET_CONFIGS
     elif args.all:
         config_names = ALL_CONFIGS
     else:
         parser.print_help()
-        print("\nSpecify --all, --zinc-only, --mnist-only, or --configs <names>")
+        print("\nSpecify --quartiles (instance 1), --datasets (instance 2), --all, or --configs <names>")
         return
 
     num_gpus = get_num_gpus()
     if args.max_gpus:
         num_gpus = min(num_gpus, args.max_gpus)
-
     if num_gpus == 0:
         print("No GPUs detected. Running sequentially on CPU.")
-        num_gpus = 1  # Use 1 "slot" for CPU
+        num_gpus = 1
 
     print(f"Launching {len(config_names)} experiments across {num_gpus} GPU(s)")
     print(f"Configs: {', '.join(config_names)}")
@@ -103,16 +104,14 @@ def main():
 
     extra_args = ["--no-wandb"] if args.no_wandb else []
 
-    # Queue and GPU pool
     queue = deque(config_names)
-    gpu_procs = {}  # gpu_id -> (proc, log_file, config_name)
+    gpu_procs = {}
     completed = []
     failed = []
 
     start_time = time.time()
 
     while queue or gpu_procs:
-        # Check for completed processes
         for gpu_id in list(gpu_procs.keys()):
             proc, log_file, name = gpu_procs[gpu_id]
             if proc.poll() is not None:
@@ -126,7 +125,6 @@ def main():
                     failed.append(name)
                 del gpu_procs[gpu_id]
 
-        # Launch new experiments on free GPUs
         for gpu_id in range(num_gpus):
             if gpu_id not in gpu_procs and queue:
                 config_name = queue.popleft()
@@ -136,7 +134,7 @@ def main():
                     gpu_procs[gpu_id] = (*result, config_name)
 
         if gpu_procs:
-            time.sleep(10)  # Poll every 10 seconds
+            time.sleep(10)
 
     total_time = (time.time() - start_time) / 60
     print(f"\n{'='*60}")

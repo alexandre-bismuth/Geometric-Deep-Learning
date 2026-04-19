@@ -1,0 +1,6 @@
+experiment_id: peptides-grit-Q2
+
+data:
+  node_count_filter:
+    min_nodes: 91
+    max_nodes: 136

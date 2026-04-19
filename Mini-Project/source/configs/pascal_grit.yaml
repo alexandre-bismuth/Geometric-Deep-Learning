@@ -1,17 +1,19 @@
-experiment_id: pascal-novnode-3L
+experiment_id: pascal-grit
 
 model:
   hidden_dim: 96
-  num_heads: 8
+  num_heads: 4
+  attn_dropout: 0.5
+  dropout: 0.0
+  pool: mean
 
 architecture:
-  num_layers: 3
-  mpnn: gatedgcn
+  num_layers: 4
   task: node_classification
 
 pe:
-  type: lappe
-  dim: 16
+  type: rrwp
+  dim: 17
 
 data:
   dataset: pascal_voc_sp
@@ -20,7 +22,7 @@ data:
 
 training:
   epochs: 300
-  warmup_epochs: 10
+  warmup_epochs: 5
   lr: 0.0005
   weight_decay: 0.0
   grad_clip: 1.0
