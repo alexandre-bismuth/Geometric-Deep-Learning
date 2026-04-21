@@ -1,27 +1,8 @@
-"""Data transforms for attention sink experiments.
-
-Key transform: AddVirtualNode — adds a virtual node connected to all real nodes,
-so it participates in GPSConv's global attention (via to_dense_batch).
-"""
-
 import torch
 from torch_geometric.transforms import BaseTransform
 
 
 class AddVirtualNode(BaseTransform):
-    """Add a virtual node connected to all real nodes in a graph.
-
-    The VNode is appended as the LAST node (index = num_nodes).
-    It gets a special node type and edge type to distinguish it from real nodes.
-
-    IMPORTANT: Apply BEFORE PE transforms (RWSE, LapPE), so the VNode gets
-    its own PE values reflecting its structural role (connected to all nodes).
-
-    Args:
-        vnode_node_type: Integer type for the virtual node (default: 28, after ZINC's 0-27).
-        vnode_edge_type: Integer type for VNode edges (default: 4, after ZINC's 0-3).
-    """
-
     def __init__(self, vnode_node_type=28, vnode_edge_type=4):
         self.vnode_node_type = vnode_node_type
         self.vnode_edge_type = vnode_edge_type
@@ -31,7 +12,6 @@ class AddVirtualNode(BaseTransform):
         vnode_idx = num_nodes
         device = data.x.device if data.x is not None else 'cpu'
 
-        # --- Pad precomputed PE tensors FIRST (before x changes num_nodes) ---
         for pe_attr in ['random_walk_pe', 'laplacian_pe']:
             if hasattr(data, pe_attr) and data[pe_attr] is not None:
                 pe = data[pe_attr]
@@ -39,7 +19,6 @@ class AddVirtualNode(BaseTransform):
                     pad = torch.zeros(1, pe.size(1), device=pe.device, dtype=pe.dtype)
                     data[pe_attr] = torch.cat([pe, pad], dim=0)
 
-        # --- Node features ---
         if data.x is not None:
             if data.x.dtype in (torch.long, torch.int, torch.int32):
                 if data.x.dim() == 1:
@@ -54,7 +33,6 @@ class AddVirtualNode(BaseTransform):
                     vnode_x = torch.zeros(1, data.x.size(1), device=device, dtype=data.x.dtype)
             data.x = torch.cat([data.x, vnode_x], dim=0)
 
-        # --- Edges: VNode <-> all real nodes (bidirectional) ---
         real_nodes = torch.arange(num_nodes, device=device)
         vnode_repeated = torch.full((num_nodes,), vnode_idx, dtype=torch.long, device=device)
         new_src = torch.cat([real_nodes, vnode_repeated])
@@ -62,7 +40,6 @@ class AddVirtualNode(BaseTransform):
         new_edges = torch.stack([new_src, new_dst], dim=0)
         data.edge_index = torch.cat([data.edge_index, new_edges], dim=1)
 
-        # --- Edge attributes for new edges ---
         if data.edge_attr is not None:
             num_new_edges = 2 * num_nodes
             if data.edge_attr.dim() == 1:
@@ -74,7 +51,6 @@ class AddVirtualNode(BaseTransform):
                                            dtype=data.edge_attr.dtype, device=device)
             data.edge_attr = torch.cat([data.edge_attr, new_edge_attr], dim=0)
 
-        # --- Store VNode index for diagnostics ---
         data.vnode_idx = vnode_idx
 
         return data
@@ -86,12 +62,6 @@ class AddVirtualNode(BaseTransform):
 
 
 class SafeLaplacianPE(BaseTransform):
-    """LapPE that gracefully handles graphs with fewer nodes than k.
-
-    If num_nodes <= k, clamps k to num_nodes - 1 and zero-pads the PE
-    to the requested dimension.
-    """
-
     def __init__(self, k=16, attr_name='laplacian_pe', is_undirected=True):
         from torch_geometric.transforms import AddLaplacianEigenvectorPE
         self.k = k

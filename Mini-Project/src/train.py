@@ -1,29 +1,23 @@
-"""Training loops with wandb logging, multi-task support, and checkpointing."""
-
 import os
 import torch
 import torch.nn as nn
 import numpy as np
+import wandb
+from tqdm.auto import tqdm
 from sklearn.metrics import average_precision_score, f1_score
 
 
 def _build_real_node_mask(batch):
-    """Build a boolean mask that is True for real nodes, False for VNodes.
-
-    Each graph in the batch has a VNode as its last node. We use the batch
-    tensor to find the boundary of each graph and exclude the last node.
-    """
     mask = torch.ones(batch.x.size(0), dtype=torch.bool, device=batch.x.device)
     _, counts = batch.batch.unique(return_counts=True)
     offset = 0
     for c in counts:
-        mask[offset + c - 1] = False  # last node in each graph is VNode
+        mask[offset + c - 1] = False
         offset += c
     return mask
 
 
 def build_criterion(task):
-    """Build loss function based on task type."""
     if task == 'regression':
         return nn.L1Loss()
     elif task == 'multilabel_classification':
@@ -37,7 +31,6 @@ def build_criterion(task):
 
 
 def build_scheduler(optimizer, config):
-    """Build learning rate scheduler: linear warmup + cosine annealing."""
     epochs = config['training']['epochs']
     warmup = config['training']['warmup_epochs']
 
@@ -54,7 +47,6 @@ def build_scheduler(optimizer, config):
 
 
 def train_epoch(model, loader, optimizer, criterion, device, task, max_grad_norm=1.0):
-    """Train for one epoch. Returns average loss."""
     model.train()
     total_loss = 0
     total_samples = 0
@@ -94,7 +86,6 @@ def train_epoch(model, loader, optimizer, criterion, device, task, max_grad_norm
 
 @torch.no_grad()
 def eval_epoch(model, loader, criterion, device, task):
-    """Evaluate on a dataset. Returns (loss, metric_value, metric_name)."""
     model.eval()
     total_loss = 0
     total_samples = 0
@@ -133,9 +124,8 @@ def eval_epoch(model, loader, criterion, device, task):
     all_preds = torch.cat(all_preds, dim=0)
     all_targets = torch.cat(all_targets, dim=0)
 
-    # Compute task-specific metric
     if task == 'regression':
-        metric_val = avg_loss  # MAE is the loss itself
+        metric_val = avg_loss
         metric_name = 'mae'
     elif task == 'multilabel_classification':
         probs = torch.sigmoid(all_preds).numpy()
@@ -157,26 +147,13 @@ def eval_epoch(model, loader, criterion, device, task):
 
 
 def is_better(metric_val, best_val, task):
-    """Check if current metric is better than best."""
     if task == 'regression':
-        return metric_val < best_val  # lower MAE is better
+        return metric_val < best_val
     else:
-        return metric_val > best_val  # higher AP/F1 is better
+        return metric_val > best_val
 
 
-def train_model(model, train_loader, val_loader, config, device, task,
-                save_dir='outputs', use_wandb=True):
-    """Full training loop with logging and checkpointing.
-
-    Returns:
-        dict with best_val_metric, train_losses, val_losses
-    """
-    if use_wandb:
-        try:
-            import wandb
-        except ImportError:
-            use_wandb = False
-
+def train_model(model, train_loader, val_loader, config, device, task, save_dir='outputs', use_wandb=True):
     epochs = config['training']['epochs']
     lr = config['training']['lr']
     wd = config['training']['weight_decay']
@@ -192,7 +169,6 @@ def train_model(model, train_loader, val_loader, config, device, task,
     train_losses = []
     val_losses = []
 
-    from tqdm.auto import tqdm
     pbar = tqdm(range(1, epochs + 1), desc='Training')
 
     for epoch in pbar:
@@ -216,23 +192,16 @@ def train_model(model, train_loader, val_loader, config, device, task,
         })
 
         if use_wandb:
-            try:
-                import wandb
-                wandb.log({
-                    'epoch': epoch,
-                    'train/loss': train_loss,
-                    'val/loss': val_loss,
-                    f'val/{metric_name}': val_metric,
-                    'lr': current_lr,
-                    f'best/{metric_name}': best_val_metric,
-                })
-            except Exception:
-                pass
+            wandb.log({
+                'epoch': epoch,
+                'train/loss': train_loss,
+                'val/loss': val_loss,
+                f'val/{metric_name}': val_metric,
+                'lr': current_lr,
+                f'best/{metric_name}': best_val_metric,
+            })
 
-    # Save final model
     torch.save(model.state_dict(), os.path.join(save_dir, 'final_model.pt'))
-
-    # Load best model
     model.load_state_dict(torch.load(os.path.join(save_dir, 'best_model.pt'), weights_only=True))
 
     return {

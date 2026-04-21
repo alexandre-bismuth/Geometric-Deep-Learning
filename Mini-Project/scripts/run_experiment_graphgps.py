@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""Run a single GraphGPS experiment: train + evaluate + diagnose + log.
-
-Usage:
-    python scripts/run_experiment_graphgps.py --config configs/zinc_graphgps.yaml
-    python scripts/run_experiment_graphgps.py --config configs/zinc_graphgps.yaml --training.epochs 100
-"""
-
 import argparse
 import copy
 import os
@@ -14,6 +6,7 @@ import sys
 import numpy as np
 import torch
 import yaml
+import wandb
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -24,7 +17,6 @@ from src.graphgps.diagnostics import run_diagnostics, aggregate_metrics, save_di
 
 
 def deep_merge(base, override):
-    """Deep merge override dict into base dict. Override takes precedence."""
     result = copy.deepcopy(base)
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
@@ -35,7 +27,6 @@ def deep_merge(base, override):
 
 
 def load_config(config_path, base_path=None):
-    """Load experiment config, merged with base."""
     if base_path is None:
         base_path = os.path.join(os.path.dirname(config_path), 'base.yaml')
 
@@ -49,7 +40,6 @@ def load_config(config_path, base_path=None):
 
 
 def apply_cli_overrides(config, overrides):
-    """Apply dotted CLI overrides like --training.epochs 100."""
     for key, value in overrides.items():
         parts = key.split('.')
         d = config
@@ -118,18 +108,13 @@ def main():
         yaml.dump(config, f, default_flow_style=False)
 
     if use_wandb:
-        try:
-            import wandb
-            wandb.init(
-                project=config['logging']['wandb_project'],
-                name=experiment_id,
-                config=config,
-                tags=[dataset_name, f"vnode={'on' if config['vnode']['enabled'] else 'off'}",
-                      f"pe={config['pe']['type']}", f"layers={config['architecture']['num_layers']}"],
-            )
-        except Exception as e:
-            print(f"wandb init failed: {e}. Continuing without wandb.")
-            use_wandb = False
+        wandb.init(
+            project=config['logging']['wandb_project'],
+            name=experiment_id,
+            config=config,
+            tags=[dataset_name, f"vnode={'on' if config['vnode']['enabled'] else 'off'}",
+                    f"pe={config['pe']['type']}", f"layers={config['architecture']['num_layers']}"],
+        )
 
     print("\nLoading data...")
     train_loader, val_loader, test_loader, dataset_info = get_dataloaders(config)
@@ -140,10 +125,7 @@ def main():
     print(f"Model parameters: {num_params:,}")
 
     print("\nTraining...")
-    results = train_model(
-        model, train_loader, val_loader, config, device, task,
-        save_dir=save_dir, use_wandb=use_wandb,
-    )
+    results = train_model(model, train_loader, val_loader, config, device, task, save_dir=save_dir, use_wandb=use_wandb)
     print(f"\nBest val {results['metric_name']}: {results['best_val_metric']:.4f}")
 
     criterion = build_criterion(task)
@@ -151,16 +133,11 @@ def main():
     print(f"Test {metric_name}: {test_metric:.4f}")
 
     if use_wandb:
-        try:
-            import wandb
-            wandb.log({f'test/{metric_name}': test_metric, 'test/loss': test_loss})
-        except Exception:
-            pass
+        wandb.log({f'test/{metric_name}': test_metric, 'test/loss': test_loss})
 
     if config['diagnostics']['enabled']:
         print("\nRunning diagnostics...")
-        metrics = run_diagnostics(model, test_loader, device,
-                                  max_graphs=config['diagnostics']['max_graphs'])
+        metrics = run_diagnostics(model, test_loader, device, max_graphs=config['diagnostics']['max_graphs'])
 
         diag_path = os.path.join(save_dir, 'diagnostics.pkl')
         save_diagnostics(metrics, diag_path)
@@ -169,28 +146,17 @@ def main():
         print_summary(agg, layers)
 
         if use_wandb:
-            try:
-                import wandb
-                for key in ['max_sink_score', 'overall_sink_rate', 'matrix_entropy',
-                            'anisotropy', 'max_to_mean_ratio']:
-                    if key in agg:
-                        vals = agg[key]['mean']
-                        valid = vals[~np.isnan(vals)] if hasattr(vals, '__len__') else []
-                        if len(valid) > 0:
-                            wandb.log({f'diag/{key}_max': float(np.nanmax(vals)),
-                                       f'diag/{key}_final': float(vals[-1]) if not np.isnan(vals[-1]) else None})
-            except Exception:
-                pass
+            for key in ['max_sink_score', 'overall_sink_rate', 'matrix_entropy', 'anisotropy', 'max_to_mean_ratio']:
+                if key in agg:
+                    vals = agg[key]['mean']
+                    valid = vals[~np.isnan(vals)] if hasattr(vals, '__len__') else []
+                    if len(valid) > 0:
+                        wandb.log({f'diag/{key}_max': float(np.nanmax(vals)),
+                                    f'diag/{key}_final': float(vals[-1]) if not np.isnan(vals[-1]) else None})
 
     if use_wandb:
-        try:
-            import wandb
-            wandb.finish()
-        except Exception:
-            pass
-
+        wandb.finish()
     print(f"\nExperiment {experiment_id} complete. Results saved to {save_dir}/")
-
 
 if __name__ == '__main__':
     main()

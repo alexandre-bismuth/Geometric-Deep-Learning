@@ -1,27 +1,16 @@
-"""Dataset loading with configurable transforms for attention sink experiments.
-
-Supports:
-- ZINC-12k (~23 nodes, graph regression)
-- MNIST-SP (~75 nodes, graph classification)
-- Peptides-func (~150 nodes, multilabel graph classification)
-- PascalVOC-SP (~480 nodes, node classification)
-"""
-
 import os
 import pickle
 import numpy as np
 import torch
 from torch_geometric.datasets import ZINC, LRGBDataset
 from torch_geometric.loader import DataLoader
-from torch_geometric.transforms import Compose, AddRandomWalkPE
+from torch_geometric.transforms import AddRandomWalkPE
 from torch_geometric.utils import get_laplacian, to_scipy_sparse_matrix, degree
 from scipy.sparse.linalg import eigsh
 from tqdm import tqdm
 
 from .transforms import AddVirtualNode, SafeLaplacianPE
 
-
-# Dataset metadata
 DATASET_INFO = {
     'zinc': {
         'task': 'regression',
@@ -29,43 +18,22 @@ DATASET_INFO = {
         'num_classes': 1,
         'num_node_types': 28,
         'num_edge_types': 4,
-        'input_type': 'categorical',  # integer node types -> nn.Embedding
+        'input_type': 'categorical',
     },
     'peptides_func': {
         'task': 'multilabel_classification',
         'metric': 'ap',
         'num_classes': 10,
-        'num_node_types': None,  # continuous features
+        'num_node_types': None,
         'num_edge_types': None,
         'input_type': 'continuous',
         'node_feat_dim': 9,
         'edge_feat_dim': 3,
-    },
-    'pascal_voc_sp': {
-        'task': 'node_classification',
-        'metric': 'f1',
-        'num_classes': 21,
-        'num_node_types': None,
-        'num_edge_types': None,
-        'input_type': 'continuous',
-        'node_feat_dim': 14,
-        'edge_feat_dim': 2,
-    },
-    'mnist_sp': {
-        'task': 'graph_classification',
-        'metric': 'accuracy',
-        'num_classes': 10,
-        'num_node_types': None,
-        'num_edge_types': None,
-        'input_type': 'continuous',
-        'node_feat_dim': 1,    # pixel intensity only (pos is separate)
-        'edge_feat_dim': 1,    # edge weight
-    },
+    }
 }
 
 
 def _build_pe_transform(config):
-    """Build ONLY the PE transform (expensive, worth caching)."""
     pe_type = config['pe']['type']
     pe_dim = config['pe']['dim']
 
@@ -77,7 +45,6 @@ def _build_pe_transform(config):
 
 
 def _build_vnode_transform(config):
-    """Build ONLY the VNode transform (cheap, applied at load time)."""
     if config['vnode']['enabled']:
         return AddVirtualNode(
             vnode_node_type=config['vnode']['vnode_node_type'],
@@ -87,32 +54,21 @@ def _build_vnode_transform(config):
 
 
 def _pe_cache_path(data_root, dataset_name, split, pe_type, pe_dim):
-    """Path for cached PE-augmented dataset."""
     cache_dir = os.path.join(data_root, 'pe_cache')
     os.makedirs(cache_dir, exist_ok=True)
     return os.path.join(cache_dir, f'{dataset_name}_{split}_{pe_type}{pe_dim}.pt')
 
 
 def _load_raw_dataset(dataset_name, data_root, split):
-    """Load a raw dataset (no transforms) for a single split."""
     if dataset_name == 'zinc':
         return ZINC(root=os.path.join(data_root, 'ZINC'), subset=True, split=split)
     elif dataset_name == 'peptides_func':
         return LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='Peptides-func', split=split)
-    elif dataset_name == 'pascal_voc_sp':
-        return LRGBDataset(root=os.path.join(data_root, 'LRGB'), name='PascalVOC-SP', split=split)
-    elif dataset_name == 'mnist_sp':
-        from torch_geometric.datasets import GNNBenchmarkDataset
-        return GNNBenchmarkDataset(root=os.path.join(data_root, 'GNNBenchmark'), name='MNIST', split=split)
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
 
 def _precompute_pe(dataset_name, data_root, split, pe_transform, pe_type, pe_dim):
-    """Precompute PE for a dataset split and cache to disk.
-
-    Returns list of PE-augmented Data objects.
-    """
     cache_path = _pe_cache_path(data_root, dataset_name, split, pe_type, pe_dim)
 
     if os.path.exists(cache_path):
@@ -135,7 +91,6 @@ def _precompute_pe(dataset_name, data_root, split, pe_transform, pe_type, pe_dim
 
 
 class PrecomputedDataset(torch.utils.data.Dataset):
-    """Wraps a list of Data objects with an optional runtime transform (e.g. VNode)."""
 
     def __init__(self, data_list, transform=None):
         self.data_list = data_list
@@ -152,18 +107,6 @@ class PrecomputedDataset(torch.utils.data.Dataset):
 
 
 def get_datasets(config):
-    """Load train/val/test datasets with precomputed PE and runtime VNode.
-
-    PE (expensive eigendecomposition) is computed once and cached to disk.
-    VNode (cheap node/edge addition) is applied at load time so the same
-    PE cache is shared between vnode and novnode experiments.
-
-    Args:
-        config: dict with keys 'data', 'vnode', 'pe'
-
-    Returns:
-        (train_dataset, val_dataset, test_dataset, info_dict)
-    """
     dataset_name = config['data']['dataset']
     data_root = config['data'].get('root', 'data')
     pe_type = config['pe']['type']
@@ -175,8 +118,7 @@ def get_datasets(config):
     datasets = {}
     for split in ['train', 'val', 'test']:
         if pe_transform is not None:
-            data_list = _precompute_pe(dataset_name, data_root, split,
-                                       pe_transform, pe_type, pe_dim)
+            data_list = _precompute_pe(dataset_name, data_root, split, pe_transform, pe_type, pe_dim)
         else:
             raw_ds = _load_raw_dataset(dataset_name, data_root, split)
             data_list = [raw_ds[i] for i in range(len(raw_ds))]
@@ -192,11 +134,6 @@ def get_datasets(config):
 
 
 def get_dataloaders(config):
-    """Load datasets and create DataLoaders.
-
-    Returns:
-        (train_loader, val_loader, test_loader, info_dict)
-    """
     train, val, test, info = get_datasets(config)
 
     batch_size = config['data']['batch_size']
@@ -209,13 +146,7 @@ def get_dataloaders(config):
     return train_loader, val_loader, test_loader, info
 
 
-# --- Spectral gap computation (for Experiment 5) ---
-
 def compute_spectral_properties(data):
-    """Compute spectral properties of a single graph.
-
-    Returns dict with lambda_2, spectral_radius, num_nodes, num_edges, avg_degree, max_degree.
-    """
     n = data.num_nodes
     if n <= 1:
         return {
@@ -224,9 +155,7 @@ def compute_spectral_properties(data):
             'avg_degree': 0.0, 'max_degree': 0,
         }
 
-    edge_index, edge_weight = get_laplacian(
-        data.edge_index, normalization='sym', num_nodes=n
-    )
+    edge_index, edge_weight = get_laplacian(data.edge_index, normalization='sym', num_nodes=n)
     L = to_scipy_sparse_matrix(edge_index, edge_weight, num_nodes=n)
     deg = degree(data.edge_index[0], num_nodes=n)
 
@@ -257,7 +186,6 @@ def compute_spectral_properties(data):
 
 
 def compute_and_cache_spectral(dataset, split_name, cache_dir='data/spectral_cache'):
-    """Compute spectral properties for all graphs in a dataset split, with caching."""
     os.makedirs(cache_dir, exist_ok=True)
     cache_path = os.path.join(cache_dir, f'{split_name}_spectral.pkl')
 

@@ -1,24 +1,14 @@
-"""GRIT (Graph Inductive Bias Transformer) implementation.
-
-Follows Ma et al., ICML 2023: "Graph Inductive Biases in Transformers without
-Message Passing." Pure Transformer architecture with RRWP positional encoding,
-flexible edge-conditioned attention, and degree scalers.
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import global_mean_pool, global_add_pool
 from torch_geometric.utils import degree, to_dense_batch
 
-
 def signed_sqrt(x):
     return torch.sqrt(F.relu(x)) - torch.sqrt(F.relu(-x))
 
 
 class GritMultiHeadAttention(nn.Module):
-    """Batched multi-head GRIT attention (Eq. 2-3). Single forward pass for all heads."""
-
     def __init__(self, hidden_dim, num_heads, attn_dropout=0.0):
         super().__init__()
         self.num_heads = num_heads
@@ -36,76 +26,44 @@ class GritMultiHeadAttention(nn.Module):
         self.attn_dropout = nn.Dropout(attn_dropout)
 
     def forward(self, x_dense, e, node_mask):
-        """
-        Args:
-            x_dense: (B, N, D)
-            e: (B, N, N, D)
-            node_mask: (B, N)
-        Returns:
-            x_out: (B, N, D)
-            e_out: (B, N, N, D)
-            attn_weights: (B, H, N, N)
-        """
         B, N, D = x_dense.shape
         H = self.num_heads
         h = self.head_dim
 
-        # (B, N, D) -> (B, N, H, h) -> (B, H, N, h)
         q = self.W_Q(x_dense).reshape(B, N, H, h).permute(0, 2, 1, 3)
         k = self.W_K(x_dense).reshape(B, N, H, h).permute(0, 2, 1, 3)
         v = self.W_V(x_dense).reshape(B, N, H, h).permute(0, 2, 1, 3)
 
-        # (B, H, N, 1, h) + (B, H, 1, N, h) -> (B, H, N, N, h)
         qk = q.unsqueeze(3) + k.unsqueeze(2)
-        del q, k
 
-        # Single edge projection split into Ew and Eb (matches official repo)
         e_proj = self.W_E(e).reshape(B, N, N, H, h * 2).permute(0, 3, 1, 2, 4)
         e_w = e_proj[..., :h]
         e_b = e_proj[..., h:]
-        del e_proj
 
-        # e_hat: signed_sqrt((Q+K)*Ew) + Eb, then ReLU (Eq. 2)
         score = signed_sqrt(qk * e_w) + e_b
-        del qk, e_w, e_b
         score = torch.clamp(score, -5.0, 5.0)
         e_hat = F.relu(score)
-        del score
 
-        # Attention logits: (B, H, N, N, h) -> (B, H, N, N)
         attn_logits = self.W_A(e_hat).squeeze(-1)
         attn_mask = node_mask.unsqueeze(1) & node_mask.unsqueeze(2)
         attn_logits = attn_logits.masked_fill(~attn_mask.unsqueeze(1), float('-inf'))
 
         attn_weights = F.softmax(attn_logits, dim=-1)
-        del attn_logits
         attn_weights = attn_weights.masked_fill(~attn_mask.unsqueeze(1), 0.0)
         attn_weights = self.attn_dropout(attn_weights)
 
-        # Node aggregation: V_j + VeRow(sum_j attn * e_hat) (matches official)
-        # Standard value aggregation
         x_V = torch.matmul(attn_weights.unsqueeze(-2), v.unsqueeze(2)).squeeze(-2)
-        del v
-        # Edge-enhance: scatter attn-weighted e_hat, then project with VeRow
-        e_weighted = attn_weights.unsqueeze(-1) * e_hat  # (B, H, N, N, h)
-        e_sum = e_weighted.sum(dim=3)  # (B, H, N, h) — sum over source nodes
-        del e_weighted
+        e_weighted = attn_weights.unsqueeze(-1) * e_hat
+        e_sum = e_weighted.sum(dim=3)
         x_attn = x_V + self.W_VeRow(e_sum.permute(0, 2, 1, 3).reshape(B, N, D)).reshape(B, N, H, h).permute(0, 2, 1, 3)
-        del x_V, e_sum
 
-        # (B, H, N, h) -> (B, N, D)
         x_out = self.W_O(x_attn.permute(0, 2, 1, 3).reshape(B, N, D))
-
-        # Edge output: (B, H, N, N, h) -> (B, N, N, D)
         e_out = self.W_Eo(e_hat.permute(0, 2, 3, 1, 4).reshape(B, N, N, D))
-        del e_hat
 
         return x_out, e_out, attn_weights
 
 
 class GritTransformerLayer(nn.Module):
-    """One GRIT Transformer block: multi-head attention + degree scaler + FFN."""
-
     def __init__(self, hidden_dim, num_heads, attn_dropout=0.0, dropout=0.0):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -128,23 +86,14 @@ class GritTransformerLayer(nn.Module):
         self.bn_node_ffn = nn.BatchNorm1d(hidden_dim)
 
     def forward(self, x_dense, e, node_mask, log_deg_dense):
-        """
-        Args:
-            x_dense: (B, N, D)
-            e: (B, N, N, D)
-            node_mask: (B, N)
-            log_deg_dense: (B, N, 1)
-        """
         B, N, D = x_dense.shape
 
         x_attn, e_attn, attn_weights = self.mha(x_dense, e, node_mask)
 
         x_attn = x_attn * self.deg_scaler_1 + log_deg_dense * x_attn * self.deg_scaler_2
         x_dense = x_dense + self.bn_node_attn(x_attn.reshape(-1, D)).reshape(B, N, D)
-        del x_attn
 
         e = e + self.bn_edge(e_attn.reshape(-1, D)).reshape(B, N, N, D)
-        del e_attn
 
         x_ffn = self.ffn(x_dense.reshape(-1, D))
         x_dense = x_dense + self.bn_node_ffn(x_ffn).reshape(B, N, D)
@@ -155,7 +104,7 @@ class GritTransformerLayer(nn.Module):
 
 
 class InstrumentedGRIT(nn.Module):
-    """GRIT model instrumented for attention sink experiments."""
+    """GRIT with hooks to collect per-layer attention weights and hidden states."""
 
     def __init__(self, config, dataset_info):
         super().__init__()
@@ -189,10 +138,7 @@ class InstrumentedGRIT(nn.Module):
         self.pe_node_enc = nn.Linear(pe_dim, hidden_dim)
         self.pe_edge_enc = nn.Linear(pe_dim, hidden_dim)
 
-        self.layers = nn.ModuleList([
-            GritTransformerLayer(hidden_dim, num_heads, attn_dropout, dropout)
-            for _ in range(num_layers)
-        ])
+        self.layers = nn.ModuleList([GritTransformerLayer(hidden_dim, num_heads, attn_dropout, dropout) for _ in range(num_layers)])
 
         num_classes = dataset_info['num_classes']
         out_dim = 1 if task == 'regression' else num_classes

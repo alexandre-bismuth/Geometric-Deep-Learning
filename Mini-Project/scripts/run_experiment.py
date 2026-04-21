@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-"""Run a single GRIT experiment: train + evaluate + diagnose + log.
-
-Usage:
-    python scripts/run_experiment.py --config configs/peptides_grit.yaml
-    python scripts/run_experiment.py --config configs/peptides_grit_q1.yaml --no-wandb
-"""
-
 import argparse
 import copy
 import os
@@ -14,6 +6,7 @@ import sys
 import numpy as np
 import torch
 import yaml
+import wandb
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -123,18 +116,13 @@ def main():
         yaml.dump(config, f, default_flow_style=False)
 
     if use_wandb:
-        try:
-            import wandb
-            wandb.init(
-                project=config['logging']['wandb_project'],
-                name=experiment_id,
-                config=config,
-                tags=[dataset_name, 'grit',
-                      f"layers={config['architecture']['num_layers']}"],
-            )
-        except Exception as e:
-            print(f"wandb init failed: {e}. Continuing without wandb.")
-            use_wandb = False
+        wandb.init(
+            project=config['logging']['wandb_project'],
+            name=experiment_id,
+            config=config,
+            tags=[dataset_name, 'grit',
+                    f"layers={config['architecture']['num_layers']}"],
+        )
 
     print("\nLoading data...")
     train_loader, val_loader, test_loader, dataset_info = get_dataloaders(config)
@@ -156,16 +144,11 @@ def main():
     print(f"Test {metric_name}: {test_metric:.4f}")
 
     if use_wandb:
-        try:
-            import wandb
-            wandb.log({f'test/{metric_name}': test_metric, 'test/loss': test_loss})
-        except Exception:
-            pass
+        wandb.log({f'test/{metric_name}': test_metric, 'test/loss': test_loss})
 
     if config['diagnostics']['enabled']:
         print("\nRunning diagnostics...")
-        metrics = run_diagnostics(model, test_loader, device,
-                                  max_graphs=config['diagnostics']['max_graphs'])
+        metrics = run_diagnostics(model, test_loader, device, max_graphs=config['diagnostics']['max_graphs'])
 
         diag_path = os.path.join(save_dir, 'diagnostics.pkl')
         save_diagnostics(metrics, diag_path)
@@ -174,28 +157,16 @@ def main():
         print_summary(agg, layers)
 
         if use_wandb:
-            try:
-                import wandb
-                for key in ['max_sink_score', 'overall_sink_rate', 'matrix_entropy',
-                            'anisotropy', 'max_to_mean_ratio']:
-                    if key in agg:
-                        vals = agg[key]['mean']
-                        valid = vals[~np.isnan(vals)] if hasattr(vals, '__len__') else []
-                        if len(valid) > 0:
-                            wandb.log({f'diag/{key}_max': float(np.nanmax(vals)),
-                                       f'diag/{key}_final': float(vals[-1]) if not np.isnan(vals[-1]) else None})
-            except Exception:
-                pass
+            for key in ['max_sink_score', 'overall_sink_rate', 'matrix_entropy', 'anisotropy', 'max_to_mean_ratio']:
+                if key in agg:
+                    vals = agg[key]['mean']
+                    valid = vals[~np.isnan(vals)] if hasattr(vals, '__len__') else []
+                    if len(valid) > 0:
+                        wandb.log({f'diag/{key}_max': float(np.nanmax(vals)), f'diag/{key}_final': float(vals[-1]) if not np.isnan(vals[-1]) else None})
 
     if use_wandb:
-        try:
-            import wandb
-            wandb.finish()
-        except Exception:
-            pass
-
+        wandb.finish()
     print(f"\nExperiment {experiment_id} complete. Results saved to {save_dir}/")
-
 
 if __name__ == '__main__':
     main()

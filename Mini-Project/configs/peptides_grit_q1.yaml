@@ -1,0 +1,7 @@
+experiment_id: peptides-grit-Q1
+
+data:
+  batch_size: 64
+  node_count_filter:
+    min_nodes: 0
+    max_nodes: 91

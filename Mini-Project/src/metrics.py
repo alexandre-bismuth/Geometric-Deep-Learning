@@ -1,31 +1,12 @@
-"""Diagnostic metrics for attention sink analysis in Graph Transformers.
-
-Metrics from three papers:
-- Sink score/rate (Barbero et al., 2025)
-- Norm ratio, matrix entropy, anisotropy (Queipo-de-Llano et al., 2025)
-- Dirichlet energy (Arroyo et al., 2025)
-"""
-
 import torch
 import numpy as np
 
 
 def compute_sink_scores(attn_matrix, epsilon=0.3):
-    """Compute per-node sink scores from an attention matrix.
-
-    Args:
-        attn_matrix: (num_heads, seq_len, seq_len) attention weights for one graph.
-                     attn_matrix[h, i, j] = how much node i attends to node j in head h.
-        epsilon: threshold for sink detection (following Barbero et al.).
-
-    Returns:
-        dict with sink_score_per_node, sink_rate_per_node, max_sink_score,
-        max_sink_node, overall_sink_rate
-    """
     H, N, _ = attn_matrix.shape
-    per_head_sink = attn_matrix.mean(dim=1)  # (H, N)
-    sink_score_per_node = per_head_sink.mean(dim=0)  # (N,)
-    sink_rate_per_node = (per_head_sink > epsilon).float().mean(dim=0)  # (N,)
+    per_head_sink = attn_matrix.mean(dim=1)
+    sink_score_per_node = per_head_sink.mean(dim=0)
+    sink_rate_per_node = (per_head_sink > epsilon).float().mean(dim=0)
     max_sink_score = sink_score_per_node.max().item()
     max_sink_node = sink_score_per_node.argmax().item()
     return {
@@ -38,10 +19,6 @@ def compute_sink_scores(attn_matrix, epsilon=0.3):
 
 
 def compute_norm_stats(H):
-    """Compute node norm statistics for a single graph.
-    Args:
-        H: (num_nodes, hidden_dim)
-    """
     norms = torch.norm(H, dim=-1)
     max_norm = norms.max().item()
     mean_norm = norms.mean().item()
@@ -57,7 +34,6 @@ def compute_norm_stats(H):
 
 
 def compute_matrix_entropy(H):
-    """Compute normalized matrix-based entropy H(X) in [0, 1]."""
     S = torch.linalg.svdvals(H.float())
     S_sq = S.pow(2)
     total = S_sq.sum()
@@ -71,7 +47,6 @@ def compute_matrix_entropy(H):
 
 
 def compute_anisotropy(H):
-    """Compute anisotropy p_1 = sigma_1^2 / ||X||_F^2."""
     S = torch.linalg.svdvals(H.float())
     S_sq = S.pow(2)
     total = S_sq.sum()
@@ -81,7 +56,6 @@ def compute_anisotropy(H):
 
 
 def compute_dirichlet_energy(H, edge_index, num_nodes):
-    """Compute unnormalized Dirichlet energy over graph edges."""
     src, dst = edge_index
     valid = (src < num_nodes) & (dst < num_nodes)
     src, dst = src[valid], dst[valid]
@@ -92,21 +66,14 @@ def compute_dirichlet_energy(H, edge_index, num_nodes):
 
 
 def compute_mixing_score(attn_matrix):
-    """Compute mixing score = average entropy of attention distributions.
-
-    High mixing = diffuse attention. Low mixing = sharp/concentrated attention.
-    """
     H_heads, N, _ = attn_matrix.shape
-    # Average attention across heads
-    avg_attn = attn_matrix.mean(dim=0)  # (N, N)
-    # Shannon entropy per query node
+    avg_attn = attn_matrix.mean(dim=0)
     log_attn = torch.log(avg_attn + 1e-10)
-    entropy_per_node = -(avg_attn * log_attn).sum(dim=-1)  # (N,)
+    entropy_per_node = -(avg_attn * log_attn).sum(dim=-1)
     return entropy_per_node.mean().item()
 
 
 def compute_all_metrics(H, edge_index, num_nodes, attn_matrix=None):
-    """Compute all metrics for a single graph at a single layer."""
     norm_stats = compute_norm_stats(H)
     result = {
         'matrix_entropy': compute_matrix_entropy(H),

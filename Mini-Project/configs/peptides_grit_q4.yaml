@@ -1,0 +1,6 @@
+experiment_id: peptides-grit-Q4
+
+data:
+  node_count_filter:
+    min_nodes: 204
+    max_nodes: 300

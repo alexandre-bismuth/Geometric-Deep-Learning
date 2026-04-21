@@ -1,5 +1,3 @@
-"""Diagnostic sweep: extract per-layer attention weights and compute all metrics."""
-
 import os
 import pickle
 import numpy as np
@@ -11,21 +9,6 @@ from .metrics import compute_all_metrics
 
 @torch.no_grad()
 def run_diagnostics(model, loader, device, max_graphs=200):
-    """Run diagnostic sweep: extract per-layer metrics and attention weights.
-
-    For each graph at each layer, computes: sink scores, norm stats,
-    matrix entropy, anisotropy, Dirichlet energy, mixing score.
-
-    Args:
-        model: InstrumentedGPS instance
-        loader: DataLoader for test set
-        device: torch device
-        max_graphs: max number of graphs to process
-
-    Returns:
-        dict mapping layer_idx -> list of per-graph metric dicts.
-        Layer 0 = input (no attention), layers 1..L = after each GPS layer.
-    """
     model.eval()
     model._register_attn_hooks()
 
@@ -40,15 +23,6 @@ def run_diagnostics(model, loader, device, max_graphs=200):
 
         batch = batch.to(device)
         _ = model(batch, collect_diagnostics=True)
-
-        # Debug: first batch
-        if graphs_processed == 0:
-            for li in range(num_layers):
-                aw = model.attn_weights[li]
-                if aw is not None:
-                    print(f"  [DEBUG] Layer {li} attn shape: {aw.shape}")
-                else:
-                    print(f"  [DEBUG] Layer {li} attn: None")
 
         batch_ids = model.layer_data[0]['batch']
         unique_graphs = batch_ids.unique()
@@ -69,38 +43,18 @@ def run_diagnostics(model, loader, device, max_graphs=200):
                     if g_idx_in_batch < attn_full.size(0):
                         attn_g = attn_full[g_idx_in_batch, :, :num_nodes_g, :num_nodes_g]
 
-                metrics = compute_all_metrics(
-                    H_graph, batch.edge_index.cpu(), num_nodes_g, attn_g
-                )
+                metrics = compute_all_metrics(H_graph, batch.edge_index.cpu(), num_nodes_g, attn_g)
                 all_metrics[layer_idx].append(metrics)
 
             graphs_processed += 1
 
     model._remove_attn_hooks()
-
-    # Summary
-    has_sink = sum(1 for m in all_metrics.get(1, []) if 'max_sink_score' in m)
-    total = len(all_metrics.get(1, []))
-    print(f"\nDiagnostic summary:")
-    print(f"  Graphs processed: {graphs_processed}")
-    print(f"  Graphs with attention data at layer 1: {has_sink}/{total}")
-
+    print(f"\nProcessed {graphs_processed} graphs")
     return all_metrics
 
 
 def aggregate_metrics(metrics_dict):
-    """Aggregate per-graph metrics into mean +/- std per layer.
-
-    Collects metric names from ALL layers (not just layer 0),
-    since attention metrics only exist at layers >= 1.
-
-    Returns:
-        (result_dict, layer_list) where result_dict maps
-        metric_name -> {'mean': array, 'std': array}
-    """
     layers = sorted(metrics_dict.keys())
-
-    # Collect metric names from ALL layers
     all_keys = set()
     for l in layers:
         for m in metrics_dict[l]:
@@ -126,7 +80,6 @@ def aggregate_metrics(metrics_dict):
 
 
 def save_diagnostics(metrics_dict, save_path):
-    """Save raw diagnostic metrics to disk."""
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     with open(save_path, 'wb') as f:
         pickle.dump(metrics_dict, f)
@@ -134,13 +87,11 @@ def save_diagnostics(metrics_dict, save_path):
 
 
 def load_diagnostics(load_path):
-    """Load diagnostic metrics from disk."""
     with open(load_path, 'rb') as f:
         return pickle.load(f)
 
 
 def print_summary(agg, layers):
-    """Print key results summary."""
     print("=== Key Results ===\n")
 
     if 'max_sink_score' in agg:
