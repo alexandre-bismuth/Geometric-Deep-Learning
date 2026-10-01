@@ -29,6 +29,16 @@ def cache_paths(config):
             for s in ('train', 'val', 'test')]
 
 
+def load_any(path):
+    """An experiment YAML (merged with its base.yaml) or a run dir's saved config.yaml (already
+    merged: no base.yaml next to it)."""
+    if os.path.exists(os.path.join(os.path.dirname(path), 'base.yaml')):
+        return load_fresh_config(path)
+    import yaml
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('configs', nargs='+')
@@ -38,14 +48,14 @@ def main():
     if args.print_paths:
         seen = []
         for c in args.configs:
-            for q in cache_paths(load_fresh_config(c)):
+            for q in cache_paths(load_any(c)):
                 if q not in seen:
                     seen.append(q)
                     print(q)
         return
     done = set()
     for c in args.configs:
-        config = load_fresh_config(c)
+        config = load_any(c)
         paths = tuple(cache_paths(config))
         if not paths or paths in done:
             continue

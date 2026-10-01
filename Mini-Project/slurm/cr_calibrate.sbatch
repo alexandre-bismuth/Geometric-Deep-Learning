@@ -1,8 +1,10 @@
 #!/bin/bash
 # GDDL camera-ready: throughput calibration on ONE node (~20-30 min). Decides WORKERS_PER_GPU.
 # GPU g runs (g+1) concurrent copies of a 10-layer ZINC GRIT training for $EPOCHS epochs, all
-# GPUs at once; every copy writes only to node-local disk (wiped at job end, nothing to Lustre
-# or home). Reported: wall time per copy and runs/hour/GPU = copies * 3600 / (wall * 2000/EPOCHS).
+# GPUs at once; every training copy writes only to node-local disk (wiped at job end). The
+# single-process cache step first builds the ZINC processed/ files and RRWP-21 cache in
+# $MP/data (Lustre scratch) if missing; they are reused by the main jobs.
+# Reported: wall time per copy and runs/hour/GPU = copies * 3600 / (wall * 2000/EPOCHS).
 #   cd "$MP" && sbatch --export=ALL,MP="$MP",VENV="$VENV" slurm/cr_calibrate.sbatch
 #SBATCH --job-name=gddl-cr-calib
 #SBATCH --nodes=1

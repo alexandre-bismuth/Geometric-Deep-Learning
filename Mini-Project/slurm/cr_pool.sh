@@ -27,6 +27,7 @@
 : "${MAX_ATTEMPTS:=6}"
 : "${SYNC_MIN:=60}"
 : "${STAGE_MAX_MB:=4000}"   # PE caches up to this size are copied to node-local disk
+: "${MAX_PEPTIDES:=3}"      # concurrent Peptides tasks (each loads the ~25 GB cache into RAM)
 LOCAL="${LOCAL:-${LOCALDIR:-${TMPDIR:-/tmp}}/gddl_cr_${SLURM_JOB_ID:-local}}"
 JOBTAG="${SLURM_JOB_ID:-local}"
 
@@ -138,8 +139,22 @@ run_task() {   # executed inside $LOCAL/work
   esac
 }
 
+pep_slot_free() {   # 0 if a Peptides slot is free right now (advisory; take_pep_slot is atomic)
+  local i
+  for i in $(seq 0 $((MAX_PEPTIDES - 1))); do [ -d "$LOCAL/locks/pepslot_$i" ] || return 0; done
+  return 1
+}
+
+take_pep_slot() {   # prints the slot dir taken, or fails
+  local i
+  for i in $(seq 0 $((MAX_PEPTIDES - 1))); do
+    if mkdir "$LOCAL/locks/pepslot_$i" 2>/dev/null; then echo "$LOCAL/locks/pepslot_$i"; return 0; fi
+  done
+  return 1
+}
+
 worker() {   # worker <id> <gpu>
-  local wid=$1 gpu=$2 line key run tag rc att
+  local wid=$1 gpu=$2 line key run tag rc att slot=""
   local idle=0
   while :; do
     [ -e "$LOCAL/STOP" ] && { echo "[w$wid] STOP flag, exiting"; return 0; }
@@ -162,7 +177,14 @@ worker() {   # worker <id> <gpu>
                    echo "[w$wid] SKIP (parent train failed/missing) $line"; continue ;;
            esac ;;
       esac
-      if mkdir "$LOCAL/claims/$key" 2>/dev/null; then claimed=$line; break; fi
+      case "$line" in *peptides*) pep_slot_free || { deferred=1; continue; } ;; esac
+      if mkdir "$LOCAL/claims/$key" 2>/dev/null; then
+        slot=""
+        case "$line" in *peptides*)
+          if ! slot=$(take_pep_slot); then rmdir "$LOCAL/claims/$key"; deferred=1; continue; fi ;;
+        esac
+        claimed=$line; break
+      fi
     done < "$MP/$QUEUE"
     if [ -z "$claimed" ]; then
       # nothing claimable: either everything is done/running, or analyses await trains
@@ -185,6 +207,7 @@ worker() {   # worker <id> <gpu>
     ( cd "$LOCAL/work" && CUDA_VISIBLE_DEVICES=$gpu run_task $claimed ) \
         > "$LOCAL/logs/task_${tag}.log" 2>&1
     rc=$?
+    [ -n "$slot" ] && rmdir "$slot" 2>/dev/null
     if [ "$rc" -eq 143 ] || [ "$rc" -eq 137 ] || [ -e "$LOCAL/KILLED" ]; then
       echo "[w$wid] $(date +%F_%T) INTERRUPTED rc=$rc $claimed (no .rc written; next job retries)"
       sync_run "$run"; rmdir "$LOCAL/claims/$key" 2>/dev/null; return 0

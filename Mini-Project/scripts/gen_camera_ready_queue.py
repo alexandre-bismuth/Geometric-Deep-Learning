@@ -33,14 +33,16 @@ P(*[f'reeval outputs/peptides-grit-s{s}' for s in (0, 1, 2)])
 P('# P1 (BLOCKING): single-factor swap (only the logit becomes q.k) and the structure-blind GRIT control.')
 P(*block('grit', 'zinc_grit_dotlogit', 'zinc-grit-dotlogit', (0, 1, 2)))
 P(*block('grit', 'zinc_grit_blind', 'zinc-grit-blind', (0, 1, 2)))
+P('# P1b (BLOCKING): GraphGPS seeds 3,4. With seeded runs only (n=3), GraphGPS [0.11, 0.62] overlaps',
+  '#   GRIT [0.06, 0.12]; n=5 restores the headline contrast. (~8 h each; fills idle workers.)')
+P(*block('gps', 'zinc_graphgps', 'zinc-graphgps', (3, 4)))
 P('# P2 (BLOCKING): is the clamp causal? retrain without it / with the official GRIT ordering.')
 P(*block('grit', 'zinc_grit_noclamp', 'zinc-grit-noclamp', (0, 1, 2)))
 P(*block('grit', 'zinc_grit_official', 'zinc-grit-official', (0, 1, 2)))
 P('# P3: single-factor swap on Peptides (size trend inside one model).')
 P(*block('grit', 'peptides_grit_dotlogit', 'peptides-grit-dotlogit', (0, 1, 2), post_pep))
-P('# P4: seeds 3,4 for the three headline arms (n=5).')
-for runner, cfg, exp in [('grit', 'zinc_grit', 'zinc-grit'), ('gps', 'zinc_graphgps', 'zinc-graphgps'),
-                         ('grit', 'zinc_grit_vnode', 'zinc-grit-vnode')]:
+P('# P4: seeds 3,4 for GRIT and GRIT+VN (n=5).')
+for runner, cfg, exp in [('grit', 'zinc_grit', 'zinc-grit'), ('grit', 'zinc_grit_vnode', 'zinc-grit-vnode')]:
     P(*block(runner, cfg, exp, (3, 4)))
 P('# P5: depth 20, one seed per arm (~2x a 10-layer run; resumes across walltime from ckpt.pt).')
 P(*block('grit', 'zinc_grit_L20', 'zinc-grit-L20', (0,)))

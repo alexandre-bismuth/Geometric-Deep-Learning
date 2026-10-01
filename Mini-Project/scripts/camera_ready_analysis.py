@@ -14,6 +14,7 @@ Sections:
   I  logit-norm slope per arm
   J  no-op test conditioned on who the sink is (VN vs real node; sink present or not)
   K  sink ablation with vs. without row renormalisation
+  L  norm intervention (one node scaled by rho)
 
 Usage: python scripts/camera_ready_analysis.py [--outputs outputs] [-o report.md]
 """
@@ -348,6 +349,37 @@ def main():
                 cols[k + 2].append(c['sink']['mae'] / c['random']['mae'])
         if any(cols):
             L.append(f'| `{a}` | ' + ' | '.join(ci(c) for c in cols) + ' |')
+
+    # L
+    L.append('\n## L. Norm intervention: scale one random real node\'s layer input by rho '
+             '(scripts/run_norm_intervention.py; 200 test graphs; per-seed values, then mean ± CI)\n')
+    L.append('Cell = median n*s_j of the scaled node / mean fraction of heads with s_j > 0.3 / '
+             'P(scaled node becomes the argmax).\n')
+    rhos = ('1.0', '2.0', '8.0', '32.0')
+    L.append('| arm | layer | ' + ' | '.join(f'rho={r}' for r in rhos) + ' |')
+    L.append('|---|---|' + '---|' * len(rhos))
+    for a in sorted(arms):
+        per = defaultdict(lambda: defaultdict(lambda: ([], [], [])))
+        for r in arms[a]:
+            if is_legacy(r):
+                continue
+            d = load(os.path.join(runs[r]['dir'], 'norm_intervention.json'))
+            if not d:
+                continue
+            for lay, byrho in d['layers'].items():
+                for rho in rhos:
+                    if rho in byrho:
+                        x = byrho[rho]
+                        per[lay][rho][0].append(x['ns_median'])
+                        per[lay][rho][1].append(x['frac_heads_above_eps_mean'])
+                        per[lay][rho][2].append(x['frac_becomes_argmax'])
+        for lay in sorted(per, key=int):
+            cells = []
+            for rho in rhos:
+                ns, hf, am = per[lay][rho]
+                cells.append(f'{np.mean(ns):.2f} / {np.mean(hf):.3f} / {np.mean(am):.2f} (n={len(ns)})'
+                             if ns else '--')
+            L.append(f'| `{a}` | {lay} | ' + ' | '.join(cells) + ' |')
 
     md = '\n'.join(L) + '\n'
     print(md)

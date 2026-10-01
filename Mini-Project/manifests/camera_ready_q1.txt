@@ -46,6 +46,22 @@ ablatenr outputs/zinc-grit-blind-s2
 cert outputs/zinc-grit-blind-s2
 probe outputs/zinc-grit-blind-s2
 perturb outputs/zinc-grit-blind-s2
+# P1b (BLOCKING): GraphGPS seeds 3,4. With seeded runs only (n=3), GraphGPS [0.11, 0.62] overlaps
+#   GRIT [0.06, 0.12]; n=5 restores the headline contrast. (~8 h each; fills idle workers.)
+train gps configs/zinc_graphgps.yaml 3
+train gps configs/zinc_graphgps.yaml 4
+eval outputs/zinc-graphgps-s3 full trained
+ablate outputs/zinc-graphgps-s3
+ablatenr outputs/zinc-graphgps-s3
+cert outputs/zinc-graphgps-s3
+probe outputs/zinc-graphgps-s3
+perturb outputs/zinc-graphgps-s3
+eval outputs/zinc-graphgps-s4 full trained
+ablate outputs/zinc-graphgps-s4
+ablatenr outputs/zinc-graphgps-s4
+cert outputs/zinc-graphgps-s4
+probe outputs/zinc-graphgps-s4
+perturb outputs/zinc-graphgps-s4
 # P2 (BLOCKING): is the clamp causal? retrain without it / with the official GRIT ordering.
 train grit configs/zinc_grit_noclamp.yaml 0
 train grit configs/zinc_grit_noclamp.yaml 1
@@ -96,7 +112,7 @@ train grit configs/peptides_grit_dotlogit.yaml 2
 eval outputs/peptides-grit-dotlogit-s0 full trained
 eval outputs/peptides-grit-dotlogit-s1 full trained
 eval outputs/peptides-grit-dotlogit-s2 full trained
-# P4: seeds 3,4 for the three headline arms (n=5).
+# P4: seeds 3,4 for GRIT and GRIT+VN (n=5).
 train grit configs/zinc_grit.yaml 3
 train grit configs/zinc_grit.yaml 4
 eval outputs/zinc-grit-s3 full trained
@@ -111,20 +127,6 @@ ablatenr outputs/zinc-grit-s4
 cert outputs/zinc-grit-s4
 probe outputs/zinc-grit-s4
 perturb outputs/zinc-grit-s4
-train gps configs/zinc_graphgps.yaml 3
-train gps configs/zinc_graphgps.yaml 4
-eval outputs/zinc-graphgps-s3 full trained
-ablate outputs/zinc-graphgps-s3
-ablatenr outputs/zinc-graphgps-s3
-cert outputs/zinc-graphgps-s3
-probe outputs/zinc-graphgps-s3
-perturb outputs/zinc-graphgps-s3
-eval outputs/zinc-graphgps-s4 full trained
-ablate outputs/zinc-graphgps-s4
-ablatenr outputs/zinc-graphgps-s4
-cert outputs/zinc-graphgps-s4
-probe outputs/zinc-graphgps-s4
-perturb outputs/zinc-graphgps-s4
 train grit configs/zinc_grit_vnode.yaml 3
 train grit configs/zinc_grit_vnode.yaml 4
 eval outputs/zinc-grit-vnode-s3 full trained

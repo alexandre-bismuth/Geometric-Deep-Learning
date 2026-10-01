@@ -46,8 +46,12 @@ python -c "import torch, torch_geometric as g; from src.model import GritMultiHe
 print('torch', torch.__version__, 'cuda', torch.version.cuda, 'pyg', g.__version__, 'GRIT_FAMILY', G.GRIT_FAMILY)"
 nvidia-smi -L 2>/dev/null || true
 
-# 1. PE caches (CPU, once): every config a train line names; analyses reuse the same files.
-CACHE_CONFIGS=$(awk '$1 == "train" {print $3}' "$QUEUE" | sort -u)
+# 1. PE caches (CPU, once): every config a train line names, plus the saved config of every
+#    existing run an analysis line targets; built once, then only loaded.
+CACHE_CONFIGS=$( { awk '$1 == "train" {print $3}' "$QUEUE"
+                   awk '$1 != "train" && $1 !~ /^#/ && NF > 1 {print $2 "/config.yaml"}' "$QUEUE" |
+                     while read -r c; do [ -f "$c" ] && echo "$c"; done; } | sort -u)
+[ -n "$CACHE_CONFIGS" ] || { echo "no configs found in $QUEUE"; exit 4; }
 # shellcheck disable=SC2086
 if ! python -u scripts/build_caches.py $CACHE_CONFIGS > "$LOCAL/logs/build_caches.log" 2>&1; then
   sync_all; echo "cache build FAILED (see logs/cr_${SLURM_JOB_ID:-local}/build_caches.log)"; exit 4
