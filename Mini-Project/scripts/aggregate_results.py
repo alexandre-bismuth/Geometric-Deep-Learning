@@ -147,11 +147,17 @@ def main():
     ap.add_argument('--json', help='also dump the raw aggregate as JSON')
     ap.add_argument('--include-partial', action='store_true',
                     help='include runs with no final_model.pt (walltime-killed)')
+    ap.add_argument('--seeded-only', action='store_true',
+                    help='camera-ready: keep only seed-controlled runs (<arm>-s<k>); drops the '
+                         'legacy unsuffixed April runs (zinc-grit, zinc-grit-vnode: 1000 epochs, '
+                         'unseeded; zinc-graphgps: unseeded)')
     args = ap.parse_args()
 
     runs = []
     for d in sorted(glob.glob(os.path.join(args.outputs, '*'))):
         if not os.path.isdir(d):
+            continue
+        if args.seeded_only and not re.search(r'-s\d+$', os.path.basename(d)):
             continue
         r = collect_run(d)
         if r.get('score') is None and r.get('sink') is None:
