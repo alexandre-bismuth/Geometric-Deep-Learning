@@ -33,6 +33,6 @@ while IFS= read -r line; do
     *) echo "$s | $line" ;;
   esac
 done < "$QUEUE" > "$out"
-if [ "$mode" = "--done-runs" ]; then sort -u "$out"; else cat "$out"
-  echo "TOTAL done=$nd failed=$nf exhausted=$nx pending=$np"; fi
+if [ "$mode" = "--done-runs" ]; then sort -u "$out"; else cat "$out"; fi
+[ "$mode" = "all" ] && echo "TOTAL done=$nd failed=$nf exhausted=$nx pending=$np"
 rm -f "$out"

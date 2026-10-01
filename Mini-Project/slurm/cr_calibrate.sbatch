@@ -25,7 +25,9 @@ L="${LOCALDIR:-${TMPDIR:-/tmp}}/gddl_calib_${SLURM_JOB_ID:-local}"
 mkdir -p "$L/work/outputs" "$L/work/data/pe_cache" "$L/logs"
 for d in configs scripts src; do ln -s "$MP/$d" "$L/work/$d"; done
 for d in ZINC LRGB; do [ -e "$MP/data/$d" ] && ln -s "$MP/data/$d" "$L/work/data/$d"; done
-python scripts/build_caches.py "$CONFIG" || exit 4          # single process, before any GPU work
+# single process, before any GPU work: builds the ZINC caches BOTH main jobs need (RRWP-21 for
+# GRIT, RWSE-28 for GraphGPS), so the two main jobs start with them present
+python scripts/build_caches.py "$CONFIG" configs/zinc_graphgps.yaml || exit 4
 python scripts/build_caches.py --print-paths "$CONFIG" | while read -r p; do cp "$MP/$p" "$L/work/$p"; done
 echo "TMPDIR=${TMPDIR:-} LOCALDIR=${LOCALDIR:-}"; df -h "$L"; nvidia-smi -L
 cd "$L/work" || exit 1

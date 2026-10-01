@@ -1,4 +1,37 @@
-# GPU_JOB_1: GDDL 2026 camera-ready training programme (ONE node)
+# GPU_JOB_1: GDDL 2026 camera-ready training programme
+
+## R. ONE-ROUND PLAN (user, 2026-10-01). This supersedes §0 (node rule) and §2–§3 below.
+
+- **Limits:** at most 2 nodes at once, every job ≤ 20 h, ONE round, no resubmits.
+- **Scope:** P1 + P1b + P2 only: 14 trains plus their analyses. P0, P3–P8 and `BG_CACHE_CONFIGS` are dropped.
+- **Job 1: calibration**
+  - `slurm/cr_calibrate.sbatch`, 1 node, ≤ 45 min.
+  - It also builds BOTH ZINC caches (RRWP-21 and RWSE-28), so the main jobs start with them present.
+- **Decision rule.** From the calibration table, let T2 = 2000 × (s/epoch/run at copies/GPU = 2) in hours.
+  - If T2 ≤ 17.5 h: `WORKERS_PER_GPU=2`, with queues `manifests/cr_nodeA.txt` and `manifests/cr_nodeB.txt`. That is 7 trains per node, all starting at t=0: 6 GRIT + 1 GraphGPS, seeds interleaved so a node failure still leaves every arm with seeds.
+  - Else, if T1 = 2000 × (s/epoch at 1 copy) ≤ 17.5 h: `WORKERS_PER_GPU=1`, with `manifests/cr_nodeA_wpg1.txt` and `manifests/cr_nodeB_wpg1.txt`. That is 4 trains per node (P1 + P1b), and P2 is dropped.
+  - Otherwise: stop and message me.
+- **Jobs 2 and 3 (concurrently, 1 node each):**
+  ```bash
+  cd $MP && sbatch --export=ALL,MP=$MP,VENV=$VENV,WORKERS_PER_GPU=<k>,QUEUE=manifests/cr_nodeA<sfx>.txt slurm/cr_node.sbatch
+  cd $MP && sbatch --export=ALL,MP=$MP,VENV=$VENV,WORKERS_PER_GPU=<k>,QUEUE=manifests/cr_nodeB<sfx>.txt slurm/cr_node.sbatch
+  ```
+  - `--time=20:00:00`, USR1 at 15 min before the end.
+  - Guards refuse:
+    - a 3rd gddl-cr job;
+    - any queued or running gddl-cr-calib job;
+    - a queue file already drained by a live job (queue lock);
+    - more than 1 node per job.
+  - The cache build is behind a Lustre mkdir lock, so the second job waits and then finds the caches present.
+- **Analyses:** inside each node queue they are ordered eval, ablatenr, ablate, probe, perturb, cert.
+  - Whatever is unfinished at the walltime, I run afterwards on CPU from the committed checkpoints.
+  - Only the trains are time-critical.
+- **At USR1 and at the end**, the job prints the unfinished and failed tasks explicitly. Nothing depends on a later job.
+- **Pre-flight:**
+  - `QUEUE=manifests/cr_nodeA.txt bash slurm/cr_status.sh | tail -1` → pending=49, and the same for B;
+  - the wpg1 files → 28 each.
+- **Commit (§4):** after both jobs end, with `QUEUE=<that node file>` for `--done-runs`. Also commit unfinished trains' partial dirs? No: commit only DONE runs.
+
 
 From the GDDL-Camera-Ready planning session (Alexandre's laptop), for the Isambard session.
 Branch `gddl-camera-ready`; this file lives at `Mini-Project/jobs/GPU_JOB_1.md`.
