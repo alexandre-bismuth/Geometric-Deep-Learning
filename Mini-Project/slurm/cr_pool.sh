@@ -28,7 +28,17 @@
 : "${SYNC_MIN:=60}"
 : "${STAGE_MAX_MB:=4000}"   # PE caches up to this size are copied to node-local disk
 : "${MAX_PEPTIDES:=3}"      # concurrent Peptides tasks (each loads the ~25 GB cache into RAM)
-LOCAL="${LOCAL:-${LOCALDIR:-${TMPDIR:-/tmp}}/gddl_cr_${SLURM_JOB_ID:-local}}"
+pick_local_base() {   # first WRITABLE node-local dir: an inherited login-node LOCALDIR/TMPDIR may not exist here
+  local d
+  for d in "${CR_LOCAL_BASE:-}" "${LOCALDIR:-}" "${TMPDIR:-}" /tmp; do
+    [ -n "$d" ] && [ -d "$d" ] && [ -w "$d" ] && { echo "$d"; return 0; }
+  done
+  return 1
+}
+if [ -z "${LOCAL:-}" ]; then
+  _base=$(pick_local_base) || { echo "no writable node-local dir"; exit 1; }
+  LOCAL="$_base/gddl_cr_${SLURM_JOB_ID:-local}"
+fi
 JOBTAG="${SLURM_JOB_ID:-local}"
 
 key_of() { printf '%s' "$1" | md5sum | cut -d' ' -f1; }
@@ -41,7 +51,7 @@ run_of_train() {   # train <runner> <config> <seed>  ->  outputs dir name (exper
 
 setup_local() {
   mkdir -p "$LOCAL/work/outputs" "$LOCAL/claims" "$LOCAL/logs" "$LOCAL/locks" "$MP/$STATE" \
-           "$MP/logs/cr_$JOBTAG"
+           "$MP/logs/cr_$JOBTAG" || { echo "cannot create $LOCAL"; exit 1; }
   local d
   for d in configs scripts src slurm manifests; do
     [ -e "$LOCAL/work/$d" ] || ln -s "$MP/$d" "$LOCAL/work/$d"

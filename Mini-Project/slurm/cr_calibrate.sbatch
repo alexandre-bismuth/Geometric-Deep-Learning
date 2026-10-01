@@ -21,8 +21,12 @@ python -c "import torch; assert torch.cuda.is_available(); print('cuda ok', torc
 if [ "${SLURM_JOB_NUM_NODES:-1}" != "1" ]; then echo "REFUSING: more than one node"; exit 3; fi
 others=$(squeue -h -u "$USER" -n gddl-cr,gddl-cr-calib -t RUNNING,PENDING -o %i 2>/dev/null | grep -vx "${SLURM_JOB_ID:-x}" | wc -l)
 if [ "$others" -ne 0 ]; then echo "REFUSING: another gddl-cr job is queued or running"; exit 3; fi
-L="${LOCALDIR:-${TMPDIR:-/tmp}}/gddl_calib_${SLURM_JOB_ID:-local}"
-mkdir -p "$L/work/outputs" "$L/work/data/pe_cache" "$L/logs"
+# first WRITABLE node-local dir: an inherited login-node LOCALDIR/TMPDIR may not exist here
+for B in "${CR_LOCAL_BASE:-}" "${LOCALDIR:-}" "${TMPDIR:-}" /tmp; do
+  [ -n "$B" ] && [ -d "$B" ] && [ -w "$B" ] && break
+done
+L="$B/gddl_calib_${SLURM_JOB_ID:-local}"
+mkdir -p "$L/work/outputs" "$L/work/data/pe_cache" "$L/logs" || { echo "cannot create $L"; exit 1; }
 for d in configs scripts src; do ln -s "$MP/$d" "$L/work/$d"; done
 for d in ZINC LRGB; do [ -e "$MP/data/$d" ] && ln -s "$MP/data/$d" "$L/work/data/$d"; done
 # single process, before any GPU work: builds the ZINC caches BOTH main jobs need (RRWP-21 for
@@ -59,4 +63,5 @@ for k in sorted(t):
           f'2000-epoch run ~{per_epoch * 2000 / 3600:.1f} h, throughput {k * 3600 / (per_epoch * 2000):.3f} runs/h/GPU')
 EOF
 grep -h "Error\|error" "$L"/logs/*.log | head -5
+cd "$MP" && case "$L" in */gddl_calib_*) rm -rf "$L" ;; esac
 echo "CALIBRATION_DONE"

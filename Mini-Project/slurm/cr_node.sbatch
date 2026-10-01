@@ -115,4 +115,5 @@ sync_all
 chmod -R g+rwX "$MP/logs/cr_${SLURM_JOB_ID:-local}" "$MP/$STATE" 2>/dev/null || true   # outputs: umask 002
 summary
 rm -rf "$QLOCK"
+case "$LOCAL" in */gddl_cr_*) rm -rf "$LOCAL" ;; esac   # node-local scratch; /tmp may not be wiped per job
 echo "CR_NODE_DONE $(date +%F_%T)"
