@@ -86,6 +86,14 @@ def main():
     if overrides:
         config = apply_cli_overrides(config, overrides)
 
+    seed = config.get('training', {}).get('seed')
+    if seed is not None:
+        from src.seed import set_seed
+        set_seed(int(seed))
+        sid = f"-s{int(seed)}"
+        if not str(config['experiment_id']).endswith(sid):
+            config['experiment_id'] = f"{config['experiment_id']}{sid}"
+
     experiment_id = config['experiment_id']
     dataset_name = config['data']['dataset']
     task = config['architecture']['task']

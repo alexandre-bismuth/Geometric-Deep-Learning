@@ -1,0 +1,1 @@
+train gps configs/zinc_graphgps.yaml 0

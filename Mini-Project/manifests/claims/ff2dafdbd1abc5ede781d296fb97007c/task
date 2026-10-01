@@ -1,0 +1,1 @@
+train gps configs/zinc_gps_vnode.yaml 2

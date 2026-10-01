@@ -1,0 +1,1 @@
+train grit configs/zinc_grit_dotbias.yaml 1

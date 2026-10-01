@@ -1,0 +1,1 @@
+eval configs/zinc_graphgps.yaml full randinit0

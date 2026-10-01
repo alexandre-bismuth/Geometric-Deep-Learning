@@ -1,0 +1,1 @@
+eval configs/zinc_grit.yaml full randinit1

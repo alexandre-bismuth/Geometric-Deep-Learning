@@ -1,0 +1,1 @@
+eval configs/zinc_gps_lappe_none.yaml full randinit0

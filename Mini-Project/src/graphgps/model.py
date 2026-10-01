@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GINEConv, GPSConv, global_add_pool, MessagePassing
+from torch_geometric.nn import GINEConv, GPSConv, ResGatedGraphConv, global_add_pool, MessagePassing
 
 
 class IdentityConv(MessagePassing):
@@ -68,6 +68,8 @@ class InstrumentedGPS(nn.Module):
                     nn.Linear(hidden_dim, hidden_dim),
                 )
                 local_model = GINEConv(gine_nn, edge_dim=hidden_dim)
+            elif mpnn_type == 'gatedgcn':
+                local_model = ResGatedGraphConv(hidden_dim, hidden_dim, edge_dim=hidden_dim)
             else:
                 local_model = IdentityConv(hidden_dim)
 
@@ -114,7 +116,8 @@ class InstrumentedGPS(nn.Module):
 
                     def make_hook(idx):
                         def hook_fn(module, args, output):
-                            if isinstance(output, tuple) and len(output) == 2:
+                            if isinstance(output, tuple) and len(output) == 2 \
+                                    and output[1] is not None:
                                 self.attn_weights[idx] = output[1].detach().cpu()
                         return hook_fn
 
@@ -127,6 +130,35 @@ class InstrumentedGPS(nn.Module):
             h.remove()
         self._attn_hooks = []
         self.attn_weights = []
+
+    @torch.no_grad()
+    def compute_logits_values(self, layer_idx, x_graph):
+        """E4/E5c offline: pre-softmax logits and per-node value norms for one graph.
+
+        x_graph: (n, D) input to layer `layer_idx` (= layer_data[layer_idx]['h'] slice).
+        Returns logits (H, n, n) and value norms (H, n), both on CPU. Uses the layer's own
+        nn.MultiheadAttention parameters; GPSConv feeds the raw layer input to attention.
+        """
+        mha = None
+        for module in self.layers[layer_idx].modules():
+            if isinstance(module, nn.MultiheadAttention):
+                mha = module
+                break
+        if mha is None:
+            raise RuntimeError('no MultiheadAttention in layer')
+        x = x_graph.float().to(mha.in_proj_weight.device)
+        n, D = x.shape
+        H = mha.num_heads
+        hd = D // H
+        qkv = x @ mha.in_proj_weight.t()
+        if mha.in_proj_bias is not None:
+            qkv = qkv + mha.in_proj_bias
+        q, k, v = qkv.split(D, dim=-1)
+        q = q.view(n, H, hd).permute(1, 0, 2)
+        k = k.view(n, H, hd).permute(1, 0, 2)
+        v = v.view(n, H, hd).permute(1, 0, 2)
+        logits = torch.matmul(q, k.transpose(-2, -1)) / (hd ** 0.5)
+        return logits.cpu(), v.norm(dim=-1).cpu()
 
     def forward(self, batch_data, collect_diagnostics=False):
         x = batch_data.x

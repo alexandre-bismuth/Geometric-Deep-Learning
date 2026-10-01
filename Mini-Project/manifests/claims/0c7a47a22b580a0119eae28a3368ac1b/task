@@ -1,0 +1,1 @@
+eval configs/zinc_grit_dotbias.yaml full randinit0

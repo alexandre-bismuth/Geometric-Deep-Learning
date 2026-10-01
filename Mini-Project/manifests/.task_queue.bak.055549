@@ -1,0 +1,332 @@
+# Tier 0: eval-only pass (existing ckpts, full test) + interventions + randinit spectra
+eval outputs/zinc-grit full trained
+eval outputs/zinc-grit-vnode full trained
+eval outputs/zinc-graphgps full trained
+eval outputs/peptides-grit-Q1 full trained
+eval outputs/peptides-grit-Q2 full trained
+eval outputs/peptides-grit-Q3 full trained
+eval outputs/peptides-grit-Q4 full trained
+eval configs/zinc_grit.yaml full randinit0
+eval configs/zinc_grit.yaml full randinit1
+eval configs/zinc_grit.yaml full randinit2
+eval configs/zinc_graphgps.yaml full randinit0
+eval configs/zinc_graphgps.yaml full randinit1
+eval configs/zinc_graphgps.yaml full randinit2
+eval configs/zinc_grit_dotbias.yaml full randinit0
+eval configs/zinc_grit_dotbias.yaml full randinit1
+eval configs/zinc_grit_dotbias.yaml full randinit2
+eval configs/zinc_grit_dot.yaml full randinit0
+eval configs/zinc_grit_dot.yaml full randinit1
+eval configs/zinc_grit_dot.yaml full randinit2
+eval configs/zinc_gps_none.yaml full randinit0
+eval configs/zinc_gps_none.yaml full randinit1
+eval configs/zinc_gps_none.yaml full randinit2
+eval configs/zinc_gps_gatedgcn.yaml full randinit0
+eval configs/zinc_gps_gatedgcn.yaml full randinit1
+eval configs/zinc_gps_gatedgcn.yaml full randinit2
+eval configs/zinc_gps_lappe_none.yaml full randinit0
+eval configs/zinc_gps_lappe_none.yaml full randinit1
+eval configs/zinc_gps_lappe_none.yaml full randinit2
+perturb outputs/zinc-grit
+perturb outputs/zinc-grit-vnode
+ablate outputs/zinc-graphgps
+ablate outputs/zinc-grit
+# Tier 1: the dial, seeds 0-2
+train grit configs/zinc_grit.yaml 0
+train gps configs/zinc_graphgps.yaml 0
+train grit configs/zinc_grit_dotbias.yaml 0
+train grit configs/zinc_grit_dot.yaml 0
+train gps configs/zinc_gps_none.yaml 0
+train gps configs/zinc_gps_gatedgcn.yaml 0
+train gps configs/zinc_gps_lappe_none.yaml 0
+train grit configs/zinc_grit.yaml 1
+train gps configs/zinc_graphgps.yaml 1
+train grit configs/zinc_grit_dotbias.yaml 1
+train grit configs/zinc_grit_dot.yaml 1
+train gps configs/zinc_gps_none.yaml 1
+train gps configs/zinc_gps_gatedgcn.yaml 1
+train gps configs/zinc_gps_lappe_none.yaml 1
+train grit configs/zinc_grit.yaml 2
+train gps configs/zinc_graphgps.yaml 2
+train grit configs/zinc_grit_dotbias.yaml 2
+train grit configs/zinc_grit_dot.yaml 2
+train gps configs/zinc_gps_none.yaml 2
+train gps configs/zinc_gps_gatedgcn.yaml 2
+train gps configs/zinc_gps_lappe_none.yaml 2
+# Tier 2: context length + register, seeds 0-2
+train grit configs/peptides_grit_q1.yaml 0
+train grit configs/peptides_grit_q2.yaml 0
+train grit configs/peptides_grit_q3.yaml 0
+train grit configs/peptides_grit_q4.yaml 0
+train grit configs/zinc_grit_vnode.yaml 0
+train gps configs/zinc_gps_vnode.yaml 0
+train gps configs/zinc_gps_vnode_perecomp.yaml 0
+train grit configs/zinc_grit_vnode_perecomp.yaml 0
+train grit configs/peptides_grit.yaml 0
+train grit configs/peptides_grit_q1.yaml 1
+train grit configs/peptides_grit_q2.yaml 1
+train grit configs/peptides_grit_q3.yaml 1
+train grit configs/peptides_grit_q4.yaml 1
+train grit configs/zinc_grit_vnode.yaml 1
+train gps configs/zinc_gps_vnode.yaml 1
+train gps configs/zinc_gps_vnode_perecomp.yaml 1
+train grit configs/zinc_grit_vnode_perecomp.yaml 1
+train grit configs/peptides_grit.yaml 1
+train grit configs/peptides_grit_q1.yaml 2
+train grit configs/peptides_grit_q2.yaml 2
+train grit configs/peptides_grit_q3.yaml 2
+train grit configs/peptides_grit_q4.yaml 2
+train grit configs/zinc_grit_vnode.yaml 2
+train gps configs/zinc_gps_vnode.yaml 2
+train gps configs/zinc_gps_vnode_perecomp.yaml 2
+train grit configs/zinc_grit_vnode_perecomp.yaml 2
+train grit configs/peptides_grit.yaml 2
+# Tier 3 (seeds 3-4) DROPPED 2026-08-17 per Alex — 32 tasks archived in manifests/tier3_dropped.txt
+# Tier 4: E5b forcing
+train grit configs/zinc_grit_forced_ent1.yaml 0
+train grit configs/zinc_grit_forced_ent2.yaml 0
+train grit configs/zinc_grit_vnode_bias.yaml 0
+train grit configs/zinc_grit_forced_ent1.yaml 1
+train grit configs/zinc_grit_forced_ent2.yaml 1
+train grit configs/zinc_grit_vnode_bias.yaml 1
+train grit configs/zinc_grit_forced_ent1.yaml 2
+train grit configs/zinc_grit_forced_ent2.yaml 2
+train grit configs/zinc_grit_vnode_bias.yaml 2
+# Tier 5 — R9b matched quartiles (added 2026-08-17 after smoke printed counts)
+train grit configs/peptides_grit_q1m.yaml 0
+train grit configs/peptides_grit_q2m.yaml 0
+train grit configs/peptides_grit_q3m.yaml 0
+train grit configs/peptides_grit_q4m.yaml 0
+train grit configs/peptides_grit_q1m.yaml 1
+train grit configs/peptides_grit_q2m.yaml 1
+train grit configs/peptides_grit_q3m.yaml 1
+train grit configs/peptides_grit_q4m.yaml 1
+train grit configs/peptides_grit_q1m.yaml 2
+train grit configs/peptides_grit_q2m.yaml 2
+train grit configs/peptides_grit_q3m.yaml 2
+train grit configs/peptides_grit_q4m.yaml 2
+train grit configs/peptides_grit_q1m.yaml 3
+train grit configs/peptides_grit_q2m.yaml 3
+train grit configs/peptides_grit_q3m.yaml 3
+train grit configs/peptides_grit_q4m.yaml 3
+train grit configs/peptides_grit_q1m.yaml 4
+train grit configs/peptides_grit_q2m.yaml 4
+train grit configs/peptides_grit_q3m.yaml 4
+train grit configs/peptides_grit_q4m.yaml 4
+eval outputs/zinc-grit-s0 full trained
+eval outputs/zinc-grit-dotbias-s0 full trained
+eval outputs/zinc-grit-s1 full trained
+eval outputs/zinc-graphgps-s1 full trained
+eval outputs/zinc-grit-dotbias-s1 full trained
+eval outputs/zinc-grit-dot-s1 full trained
+eval outputs/zinc-gps-none-s1 full trained
+eval outputs/zinc-gps-gatedgcn-s1 full trained
+eval outputs/zinc-gps-lappe-none-s1 full trained
+eval outputs/zinc-grit-s2 full trained
+eval outputs/zinc-graphgps-s2 full trained
+eval outputs/zinc-grit-dotbias-s2 full trained
+eval outputs/zinc-grit-dot-s2 full trained
+eval outputs/zinc-gps-none-s2 full trained
+eval outputs/zinc-gps-gatedgcn-s2 full trained
+eval outputs/zinc-gps-lappe-none-s2 full trained
+eval outputs/peptides-grit-Q1-s0 full trained
+eval outputs/peptides-grit-Q2-s0 full trained
+eval outputs/peptides-grit-Q3-s0 full trained
+eval outputs/peptides-grit-Q4-s0 full trained
+#F eval outputs/zinc-grit-vnode-s0 full trained
+eval outputs/zinc-gps-vnode-s0 full trained
+eval outputs/zinc-gps-vnode-perecomp-s0 full trained
+#F eval outputs/zinc-grit-vnode-perecomp-s0 full trained
+eval outputs/peptides-grit-s0 full trained
+eval outputs/peptides-grit-Q1-s1 full trained
+eval outputs/peptides-grit-Q2-s1 full trained
+eval outputs/peptides-grit-Q3-s1 full trained
+eval outputs/peptides-grit-Q4-s1 full trained
+#F eval outputs/zinc-grit-vnode-s1 full trained
+eval outputs/zinc-gps-vnode-s1 full trained
+eval outputs/zinc-gps-vnode-perecomp-s1 full trained
+#F eval outputs/zinc-grit-vnode-perecomp-s1 full trained
+eval outputs/peptides-grit-s1 full trained
+eval outputs/peptides-grit-Q1-s2 full trained
+eval outputs/peptides-grit-Q2-s2 full trained
+eval outputs/peptides-grit-Q3-s2 full trained
+eval outputs/peptides-grit-Q4-s2 full trained
+#F eval outputs/zinc-grit-vnode-s2 full trained
+#F eval outputs/zinc-gps-vnode-s2 full trained
+#F eval outputs/zinc-gps-vnode-perecomp-s2 full trained
+#F eval outputs/zinc-grit-vnode-perecomp-s2 full trained
+eval outputs/peptides-grit-s2 full trained
+#F eval outputs/zinc-grit-forced-ent1-s0 full trained
+#F eval outputs/zinc-grit-forced-ent2-s0 full trained
+#F eval outputs/zinc-grit-vnode-bias-s0 full trained
+#F eval outputs/zinc-grit-forced-ent1-s1 full trained
+#F eval outputs/zinc-grit-forced-ent2-s1 full trained
+#F eval outputs/zinc-grit-vnode-bias-s1 full trained
+#F eval outputs/zinc-grit-forced-ent1-s2 full trained
+#F eval outputs/zinc-grit-forced-ent2-s2 full trained
+#F eval outputs/zinc-grit-vnode-bias-s2 full trained
+eval outputs/peptides-grit-Q1m-s0 full trained
+eval outputs/peptides-grit-Q2m-s0 full trained
+eval outputs/peptides-grit-Q3m-s0 full trained
+eval outputs/peptides-grit-Q4m-s0 full trained
+eval outputs/peptides-grit-Q1m-s1 full trained
+eval outputs/peptides-grit-Q2m-s1 full trained
+eval outputs/peptides-grit-Q3m-s1 full trained
+eval outputs/peptides-grit-Q4m-s1 full trained
+eval outputs/peptides-grit-Q1m-s2 full trained
+eval outputs/peptides-grit-Q2m-s2 full trained
+eval outputs/peptides-grit-Q3m-s2 full trained
+eval outputs/peptides-grit-Q4m-s2 full trained
+eval outputs/peptides-grit-Q1m-s3 full trained
+eval outputs/peptides-grit-Q2m-s3 full trained
+eval outputs/peptides-grit-Q3m-s3 full trained
+eval outputs/peptides-grit-Q4m-s3 full trained
+eval outputs/peptides-grit-Q1m-s4 full trained
+eval outputs/peptides-grit-Q2m-s4 full trained
+eval outputs/peptides-grit-Q3m-s4 full trained
+#F eval outputs/peptides-grit-Q4m-s4 full trained
+#F cert outputs/zinc-grit-s0
+#F cert outputs/zinc-grit-dotbias-s0
+#F cert outputs/zinc-grit-s1
+#F cert outputs/zinc-graphgps-s1
+#F cert outputs/zinc-grit-dotbias-s1
+#F cert outputs/zinc-grit-dot-s1
+#F cert outputs/zinc-gps-none-s1
+#F cert outputs/zinc-gps-gatedgcn-s1
+#F cert outputs/zinc-gps-lappe-none-s1
+#F cert outputs/zinc-grit-s2
+#F cert outputs/zinc-graphgps-s2
+#F cert outputs/zinc-grit-dotbias-s2
+#F cert outputs/zinc-grit-dot-s2
+#F cert outputs/zinc-gps-none-s2
+#F cert outputs/zinc-gps-gatedgcn-s2
+#F cert outputs/zinc-gps-lappe-none-s2
+#F cert outputs/peptides-grit-Q1m-s0
+#F cert outputs/peptides-grit-Q2m-s0
+#F cert outputs/peptides-grit-Q3m-s0
+#F cert outputs/peptides-grit-Q4m-s0
+#F probe outputs/zinc-grit-s0
+#F probe outputs/zinc-graphgps-s0
+#F probe outputs/zinc-grit-dotbias-s0
+#F probe outputs/zinc-gps-gatedgcn-s0
+#F probe outputs/zinc-grit-s1
+#F probe outputs/zinc-graphgps-s1
+#F probe outputs/zinc-grit-dotbias-s1
+#F probe outputs/zinc-grit-dot-s1
+#F probe outputs/zinc-gps-none-s1
+#F probe outputs/zinc-gps-gatedgcn-s1
+#F probe outputs/zinc-gps-lappe-none-s1
+#F probe outputs/zinc-grit-s2
+#F probe outputs/zinc-graphgps-s2
+#F probe outputs/zinc-grit-dotbias-s2
+#F probe outputs/zinc-grit-dot-s2
+#F probe outputs/zinc-gps-none-s2
+#F probe outputs/zinc-gps-gatedgcn-s2
+#F probe outputs/zinc-gps-lappe-none-s2
+ablate outputs/zinc-gps-gatedgcn-s0
+perturb outputs/zinc-gps-gatedgcn-s0
+ablate outputs/zinc-gps-gatedgcn-s1
+perturb outputs/zinc-gps-gatedgcn-s1
+ablate outputs/zinc-gps-gatedgcn-s2
+perturb outputs/zinc-gps-gatedgcn-s2
+ablate outputs/zinc-gps-lappe-none-s0
+perturb outputs/zinc-gps-lappe-none-s0
+ablate outputs/zinc-gps-lappe-none-s1
+perturb outputs/zinc-gps-lappe-none-s1
+ablate outputs/zinc-gps-lappe-none-s2
+perturb outputs/zinc-gps-lappe-none-s2
+ablate outputs/zinc-gps-none-s0
+perturb outputs/zinc-gps-none-s0
+ablate outputs/zinc-gps-none-s1
+perturb outputs/zinc-gps-none-s1
+ablate outputs/zinc-gps-none-s2
+perturb outputs/zinc-gps-none-s2
+ablate outputs/zinc-gps-vnode-perecomp-s0
+perturb outputs/zinc-gps-vnode-perecomp-s0
+ablate outputs/zinc-gps-vnode-perecomp-s1
+perturb outputs/zinc-gps-vnode-perecomp-s1
+ablate outputs/zinc-gps-vnode-perecomp-s2
+perturb outputs/zinc-gps-vnode-perecomp-s2
+ablate outputs/zinc-gps-vnode-s0
+perturb outputs/zinc-gps-vnode-s0
+ablate outputs/zinc-gps-vnode-s1
+perturb outputs/zinc-gps-vnode-s1
+ablate outputs/zinc-gps-vnode-s2
+perturb outputs/zinc-gps-vnode-s2
+perturb outputs/zinc-graphgps
+ablate outputs/zinc-graphgps-s0
+perturb outputs/zinc-graphgps-s0
+ablate outputs/zinc-graphgps-s1
+perturb outputs/zinc-graphgps-s1
+ablate outputs/zinc-graphgps-s2
+perturb outputs/zinc-graphgps-s2
+ablate outputs/zinc-grit-dot-s0
+perturb outputs/zinc-grit-dot-s0
+ablate outputs/zinc-grit-dot-s1
+perturb outputs/zinc-grit-dot-s1
+ablate outputs/zinc-grit-dot-s2
+perturb outputs/zinc-grit-dot-s2
+ablate outputs/zinc-grit-dotbias-s0
+perturb outputs/zinc-grit-dotbias-s0
+ablate outputs/zinc-grit-dotbias-s1
+perturb outputs/zinc-grit-dotbias-s1
+ablate outputs/zinc-grit-dotbias-s2
+perturb outputs/zinc-grit-dotbias-s2
+ablate outputs/zinc-grit-s0
+perturb outputs/zinc-grit-s0
+ablate outputs/zinc-grit-s1
+perturb outputs/zinc-grit-s1
+ablate outputs/zinc-grit-s2
+perturb outputs/zinc-grit-s2
+ablate outputs/zinc-grit-vnode
+ablate outputs/zinc-grit-vnode-perecomp-s0
+perturb outputs/zinc-grit-vnode-perecomp-s0
+ablate outputs/zinc-grit-vnode-s0
+perturb outputs/zinc-grit-vnode-s0
+eval configs/zinc_gps_vnode.yaml full randinit0
+eval configs/zinc_gps_vnode.yaml full randinit1
+eval configs/zinc_gps_vnode.yaml full randinit2
+eval configs/zinc_gps_vnode_perecomp.yaml full randinit0
+eval configs/zinc_gps_vnode_perecomp.yaml full randinit1
+eval configs/zinc_gps_vnode_perecomp.yaml full randinit2
+eval configs/zinc_grit_vnode.yaml full randinit0
+eval configs/zinc_grit_vnode.yaml full randinit1
+eval configs/zinc_grit_vnode.yaml full randinit2
+eval configs/zinc_grit_vnode_bias.yaml full randinit0
+eval configs/zinc_grit_vnode_bias.yaml full randinit1
+eval configs/zinc_grit_vnode_bias.yaml full randinit2
+eval configs/zinc_grit_forced_ent1.yaml full randinit0
+eval configs/zinc_grit_forced_ent1.yaml full randinit1
+eval configs/zinc_grit_forced_ent1.yaml full randinit2
+eval configs/zinc_grit_forced_ent2.yaml full randinit0
+eval configs/zinc_grit_forced_ent2.yaml full randinit1
+eval configs/zinc_grit_forced_ent2.yaml full randinit2
+# --- 2026-08-18 14:2x: ablate+perturb for the 13 in-flight arms (were eval-only).
+# Matches the vnode-family pattern (ablate eval perturb). #F-gated: pools started
+# before the not-ready guard treat these as comments and cannot score partial runs.
+#F ablate outputs/zinc-grit-vnode-s1
+#F perturb outputs/zinc-grit-vnode-s1
+#F ablate outputs/zinc-grit-vnode-s2
+#F perturb outputs/zinc-grit-vnode-s2
+#F ablate outputs/zinc-grit-vnode-perecomp-s1
+#F perturb outputs/zinc-grit-vnode-perecomp-s1
+#F ablate outputs/zinc-grit-vnode-perecomp-s2
+#F perturb outputs/zinc-grit-vnode-perecomp-s2
+#F ablate outputs/zinc-grit-forced-ent1-s0
+#F perturb outputs/zinc-grit-forced-ent1-s0
+#F ablate outputs/zinc-grit-forced-ent1-s1
+#F perturb outputs/zinc-grit-forced-ent1-s1
+#F ablate outputs/zinc-grit-forced-ent1-s2
+#F perturb outputs/zinc-grit-forced-ent1-s2
+#F ablate outputs/zinc-grit-forced-ent2-s0
+#F perturb outputs/zinc-grit-forced-ent2-s0
+#F ablate outputs/zinc-grit-forced-ent2-s1
+#F perturb outputs/zinc-grit-forced-ent2-s1
+#F ablate outputs/zinc-grit-forced-ent2-s2
+#F perturb outputs/zinc-grit-forced-ent2-s2
+#F ablate outputs/zinc-grit-vnode-bias-s0
+#F perturb outputs/zinc-grit-vnode-bias-s0
+#F ablate outputs/zinc-grit-vnode-bias-s1
+#F perturb outputs/zinc-grit-vnode-bias-s1
+#F ablate outputs/zinc-grit-vnode-bias-s2
+#F perturb outputs/zinc-grit-vnode-bias-s2

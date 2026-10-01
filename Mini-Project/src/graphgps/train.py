@@ -1,3 +1,4 @@
+import json
 import os
 import torch
 import torch.nn as nn
@@ -5,6 +6,8 @@ import numpy as np
 import wandb
 from tqdm.auto import tqdm
 from sklearn.metrics import average_precision_score, f1_score
+
+from src.train import _config_fingerprint, _save_ckpt, _try_resume
 
 
 def _build_real_node_mask(batch):
@@ -38,7 +41,7 @@ def build_scheduler(optimizer, config):
         optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup
     )
     cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=epochs - warmup, eta_min=1e-6
+        optimizer, T_max=max(1, epochs - warmup), eta_min=1e-6
     )
     scheduler = torch.optim.lr_scheduler.SequentialLR(
         optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup]
@@ -169,7 +172,18 @@ def train_model(model, train_loader, val_loader, config, device, task, save_dir=
     train_losses = []
     val_losses = []
 
-    pbar = tqdm(range(1, epochs + 1), desc='Training')
+    # Same walltime insurance as the GRIT trainer (src/train.py), sharing its helpers.
+    ckpt_every = int(config['training'].get('ckpt_every_epochs', 50) or 0)
+    fingerprint = _config_fingerprint(config)
+    start_epoch = 1
+    if ckpt_every:
+        start_epoch, resumed_best, resumed_tr, resumed_val = _try_resume(
+            save_dir, device, model, optimizer, scheduler, fingerprint, epochs)
+        if resumed_best is not None:
+            best_val_metric, train_losses, val_losses = resumed_best, resumed_tr, resumed_val
+
+    pbar = tqdm(range(start_epoch, epochs + 1), desc='Training', initial=start_epoch - 1,
+                total=epochs)
 
     for epoch in pbar:
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device, task, grad_clip)
@@ -201,7 +215,20 @@ def train_model(model, train_loader, val_loader, config, device, task, save_dir=
                 f'best/{metric_name}': best_val_metric,
             })
 
+        if ckpt_every and (epoch % ckpt_every == 0):
+            _save_ckpt(save_dir, epoch, epochs, model, optimizer, scheduler,
+                       best_val_metric, train_losses, val_losses, fingerprint)
+
     torch.save(model.state_dict(), os.path.join(save_dir, 'final_model.pt'))
+    if ckpt_every:
+        for _f in ('ckpt.pt', 'ckpt.pt.tmp'):
+            try:
+                os.remove(os.path.join(save_dir, _f))
+            except OSError:
+                pass
+        with open(os.path.join(save_dir, 'latest_checkpoint.json'), 'w') as _fh:
+            json.dump({'path': os.path.join(save_dir, 'final_model.pt'),
+                       'epoch': epochs, 'epochs': epochs, 'complete': True}, _fh)
     model.load_state_dict(torch.load(os.path.join(save_dir, 'best_model.pt'), weights_only=True))
 
     return {

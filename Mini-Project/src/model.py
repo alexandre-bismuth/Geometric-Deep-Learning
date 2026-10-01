@@ -9,23 +9,48 @@ def signed_sqrt(x):
 
 
 class GritMultiHeadAttention(nn.Module):
-    def __init__(self, hidden_dim, num_heads, attn_dropout=0.0):
+    """GRIT attention with switchable scoring path (E1/E4 arms).
+
+    attn_mode:
+      'grit'     — signed-sqrt edge-conditioned scoring (original; default; state-dict
+                   identical to v1, so old checkpoints load unchanged)
+      'dot_bias' — scaled dot-product logits + additive edge/RRWP bias (Graphormer-style);
+                   plain values (no edge-value channel)
+      'dot'      — scaled dot-product only; no edge conditioning anywhere
+    """
+
+    def __init__(self, hidden_dim, num_heads, attn_dropout=0.0, attn_mode='grit'):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = hidden_dim // num_heads
+        self.attn_mode = attn_mode
         h = self.head_dim
 
         self.W_Q = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.W_K = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.W_V = nn.Linear(hidden_dim, hidden_dim, bias=True)
-        self.W_E = nn.Linear(hidden_dim, hidden_dim * 2, bias=True)
-        self.W_VeRow = nn.Linear(hidden_dim, hidden_dim, bias=True)
-        self.W_A = nn.Linear(h, 1, bias=False)
+        if attn_mode == 'grit':
+            self.W_E = nn.Linear(hidden_dim, hidden_dim * 2, bias=True)
+            self.W_VeRow = nn.Linear(hidden_dim, hidden_dim, bias=True)
+            self.W_A = nn.Linear(h, 1, bias=False)
+            self.W_Eo = nn.Linear(hidden_dim, hidden_dim, bias=True)
+        elif attn_mode == 'dot_bias':
+            self.W_Eb = nn.Linear(hidden_dim, hidden_dim, bias=True)
+            self.W_A = nn.Linear(h, 1, bias=False)
+            self.W_Eo = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.W_O = nn.Linear(hidden_dim, hidden_dim, bias=True)
-        self.W_Eo = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.attn_dropout = nn.Dropout(attn_dropout)
 
-    def forward(self, x_dense, e, node_mask):
+        # diagnostics / interventions (all off by default; no state)
+        self.collect_extra = False       # stash logits / value norms / clamp frac
+        self.entropy_track = False       # accumulate row-entropy (E5b forcing)
+        self.ablate_node = None          # E5a: zero this key column + renormalise
+        self._attn_logits = None
+        self._value_norms = None
+        self._clamp_frac = None
+        self._row_entropy = None
+
+    def forward(self, x_dense, e, node_mask, vnode_cols=None, sink_bias=None):
         B, N, D = x_dense.shape
         H = self.num_heads
         h = self.head_dim
@@ -34,48 +59,85 @@ class GritMultiHeadAttention(nn.Module):
         k = self.W_K(x_dense).reshape(B, N, H, h).permute(0, 2, 1, 3)
         v = self.W_V(x_dense).reshape(B, N, H, h).permute(0, 2, 1, 3)
 
-        qk = q.unsqueeze(3) + k.unsqueeze(2)
+        e_hat = None
+        if self.attn_mode == 'grit':
+            qk = q.unsqueeze(3) + k.unsqueeze(2)
+            e_proj = self.W_E(e).reshape(B, N, N, H, h * 2).permute(0, 3, 1, 2, 4)
+            e_w = e_proj[..., :h]
+            e_b = e_proj[..., h:]
+            score = signed_sqrt(qk * e_w) + e_b
+            if self.collect_extra:
+                self._clamp_frac = (score.abs() >= 5.0).float().mean().item()
+            score = torch.clamp(score, -5.0, 5.0)
+            e_hat = F.relu(score)
+            attn_logits = self.W_A(e_hat).squeeze(-1)
+        elif self.attn_mode == 'dot_bias':
+            attn_logits = torch.matmul(q, k.transpose(-2, -1)) / (h ** 0.5)
+            e_b = self.W_Eb(e).reshape(B, N, N, H, h).permute(0, 3, 1, 2, 4)
+            e_hat = F.relu(torch.clamp(e_b, -5.0, 5.0))
+            attn_logits = attn_logits + self.W_A(e_hat).squeeze(-1)
+        else:  # 'dot'
+            attn_logits = torch.matmul(q, k.transpose(-2, -1)) / (h ** 0.5)
 
-        e_proj = self.W_E(e).reshape(B, N, N, H, h * 2).permute(0, 3, 1, 2, 4)
-        e_w = e_proj[..., :h]
-        e_b = e_proj[..., h:]
+        if sink_bias is not None and vnode_cols is not None:
+            # E5b bias forcing: add a learned scalar to every logit pointing at the vnode
+            col_onehot = F.one_hot(vnode_cols, num_classes=N).to(attn_logits.dtype)  # (B, N)
+            attn_logits = attn_logits + sink_bias * col_onehot.unsqueeze(1).unsqueeze(1)
 
-        score = signed_sqrt(qk * e_w) + e_b
-        score = torch.clamp(score, -5.0, 5.0)
-        e_hat = F.relu(score)
-
-        attn_logits = self.W_A(e_hat).squeeze(-1)
         attn_mask = node_mask.unsqueeze(1) & node_mask.unsqueeze(2)
         attn_logits = attn_logits.masked_fill(~attn_mask.unsqueeze(1), float('-inf'))
 
         attn_weights = F.softmax(attn_logits, dim=-1)
         attn_weights = attn_weights.masked_fill(~attn_mask.unsqueeze(1), 0.0)
+
+        if self.ablate_node is not None:
+            w = attn_weights.clone()
+            w[:, :, :, self.ablate_node] = 0.0
+            attn_weights = w / w.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+            attn_weights = attn_weights.masked_fill(~attn_mask.unsqueeze(1), 0.0)
+
+        if self.entropy_track:
+            p = attn_weights.clamp_min(1e-10)
+            row_ent = -(attn_weights * p.log()).sum(dim=-1)          # (B, H, N)
+            valid = node_mask.unsqueeze(1).expand(-1, H, -1)
+            self._row_entropy = (row_ent * valid).sum() / valid.sum().clamp_min(1)
+
+        if self.collect_extra:
+            self._attn_logits = attn_logits.detach().cpu()
+            self._value_norms = v.norm(dim=-1).detach().cpu()        # (B, H, N)
+
         attn_weights = self.attn_dropout(attn_weights)
 
         x_V = torch.matmul(attn_weights.unsqueeze(-2), v.unsqueeze(2)).squeeze(-2)
-        e_weighted = attn_weights.unsqueeze(-1) * e_hat
-        e_sum = e_weighted.sum(dim=3)
-        x_attn = x_V + self.W_VeRow(e_sum.permute(0, 2, 1, 3).reshape(B, N, D)).reshape(B, N, H, h).permute(0, 2, 1, 3)
+        if self.attn_mode == 'grit':
+            e_weighted = attn_weights.unsqueeze(-1) * e_hat
+            e_sum = e_weighted.sum(dim=3)
+            x_attn = x_V + self.W_VeRow(e_sum.permute(0, 2, 1, 3).reshape(B, N, D)).reshape(B, N, H, h).permute(0, 2, 1, 3)
+        else:
+            x_attn = x_V
 
         x_out = self.W_O(x_attn.permute(0, 2, 1, 3).reshape(B, N, D))
-        e_out = self.W_Eo(e_hat.permute(0, 2, 3, 1, 4).reshape(B, N, N, D))
+        e_out = None
+        if self.attn_mode in ('grit', 'dot_bias'):
+            e_out = self.W_Eo(e_hat.permute(0, 2, 3, 1, 4).reshape(B, N, N, D))
 
         return x_out, e_out, attn_weights
 
 
 class GritTransformerLayer(nn.Module):
-    def __init__(self, hidden_dim, num_heads, attn_dropout=0.0, dropout=0.0):
+    def __init__(self, hidden_dim, num_heads, attn_dropout=0.0, dropout=0.0, attn_mode='grit'):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
 
-        self.mha = GritMultiHeadAttention(hidden_dim, num_heads, attn_dropout)
+        self.mha = GritMultiHeadAttention(hidden_dim, num_heads, attn_dropout, attn_mode=attn_mode)
 
         self.deg_scaler_1 = nn.Parameter(torch.ones(hidden_dim))
         self.deg_scaler_2 = nn.Parameter(torch.zeros(hidden_dim))
 
         self.bn_node_attn = nn.BatchNorm1d(hidden_dim)
-        self.bn_edge = nn.BatchNorm1d(hidden_dim)
+        if attn_mode in ('grit', 'dot_bias'):
+            self.bn_edge = nn.BatchNorm1d(hidden_dim)
 
         self.ffn = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim * 2),
@@ -85,15 +147,17 @@ class GritTransformerLayer(nn.Module):
         )
         self.bn_node_ffn = nn.BatchNorm1d(hidden_dim)
 
-    def forward(self, x_dense, e, node_mask, log_deg_dense):
+    def forward(self, x_dense, e, node_mask, log_deg_dense, vnode_cols=None, sink_bias=None):
         B, N, D = x_dense.shape
 
-        x_attn, e_attn, attn_weights = self.mha(x_dense, e, node_mask)
+        x_attn, e_attn, attn_weights = self.mha(x_dense, e, node_mask,
+                                                vnode_cols=vnode_cols, sink_bias=sink_bias)
 
         x_attn = x_attn * self.deg_scaler_1 + log_deg_dense * x_attn * self.deg_scaler_2
         x_dense = x_dense + self.bn_node_attn(x_attn.reshape(-1, D)).reshape(B, N, D)
 
-        e = e + self.bn_edge(e_attn.reshape(-1, D)).reshape(B, N, N, D)
+        if e_attn is not None:
+            e = e + self.bn_edge(e_attn.reshape(-1, D)).reshape(B, N, N, D)
 
         x_ffn = self.ffn(x_dense.reshape(-1, D))
         x_dense = x_dense + self.bn_node_ffn(x_ffn).reshape(B, N, D)
@@ -123,6 +187,11 @@ class InstrumentedGRIT(nn.Module):
         self.pe_dim = pe_dim
         self.input_type = dataset_info['input_type']
         self.pool = config.get('model', {}).get('pool', 'mean')
+        self.attn_mode = config.get('model', {}).get('attn_mode', 'grit')
+        self.use_node_pe = config.get('model', {}).get('use_node_pe', True)
+        self.has_vnode = config.get('vnode', {}).get('enabled', False)
+        use_sink_bias = config.get('model', {}).get('sink_bias', False)
+        self.sink_bias_param = nn.Parameter(torch.zeros(())) if use_sink_bias else None
 
         if self.input_type == 'categorical':
             num_node_types = dataset_info['num_node_types']
@@ -135,10 +204,16 @@ class InstrumentedGRIT(nn.Module):
             self.node_emb = nn.Linear(node_feat_dim, hidden_dim)
             self.edge_emb = nn.Linear(edge_feat_dim, hidden_dim)
 
-        self.pe_node_enc = nn.Linear(pe_dim, hidden_dim)
-        self.pe_edge_enc = nn.Linear(pe_dim, hidden_dim)
+        if self.use_node_pe:
+            self.pe_node_enc = nn.Linear(pe_dim, hidden_dim)
+        if self.attn_mode in ('grit', 'dot_bias'):
+            self.pe_edge_enc = nn.Linear(pe_dim, hidden_dim)
 
-        self.layers = nn.ModuleList([GritTransformerLayer(hidden_dim, num_heads, attn_dropout, dropout) for _ in range(num_layers)])
+        self.layers = nn.ModuleList([
+            GritTransformerLayer(hidden_dim, num_heads, attn_dropout, dropout,
+                                 attn_mode=self.attn_mode)
+            for _ in range(num_layers)
+        ])
 
         num_classes = dataset_info['num_classes']
         out_dim = 1 if task == 'regression' else num_classes
@@ -152,6 +227,17 @@ class InstrumentedGRIT(nn.Module):
 
         self.layer_data = []
         self.attn_weights = []
+        self.attn_logits = []
+        self.value_norms = []
+
+    def pop_attn_entropy(self):
+        """E5b: mean attention row-entropy across layers from the last forward (with grad)."""
+        ents = [l.mha._row_entropy for l in self.layers if l.mha._row_entropy is not None]
+        for l in self.layers:
+            l.mha._row_entropy = None
+        if not ents:
+            return None
+        return torch.stack(ents).mean()
 
     def forward(self, batch_data, collect_diagnostics=False):
         x = batch_data.x
@@ -168,56 +254,73 @@ class InstrumentedGRIT(nn.Module):
                 x = x.unsqueeze(-1)
             x = self.node_emb(x)
 
-        if hasattr(batch_data, 'rrwp_node') and batch_data.rrwp_node is not None:
+        if self.use_node_pe and hasattr(batch_data, 'rrwp_node') and batch_data.rrwp_node is not None:
             x = x + self.pe_node_enc(batch_data.rrwp_node)
 
         x_dense, node_mask = to_dense_batch(x, batch)
         B, N_max, D = x_dense.shape
 
-        e_dense = torch.zeros(B, N_max, N_max, self.hidden_dim, device=x.device)
+        e_dense = None
+        if self.attn_mode in ('grit', 'dot_bias'):
+            e_dense = torch.zeros(B, N_max, N_max, self.hidden_dim, device=x.device)
 
-        if edge_attr is not None:
-            if self.input_type == 'categorical':
-                ea = self.edge_emb(edge_attr.squeeze(-1))
-            else:
-                if edge_attr.dtype == torch.long:
-                    edge_attr = edge_attr.float()
-                if edge_attr.dim() == 1:
-                    edge_attr = edge_attr.unsqueeze(-1)
-                ea = self.edge_emb(edge_attr)
+            if edge_attr is not None:
+                if self.input_type == 'categorical':
+                    ea = self.edge_emb(edge_attr.squeeze(-1))
+                else:
+                    if edge_attr.dtype == torch.long:
+                        edge_attr = edge_attr.float()
+                    if edge_attr.dim() == 1:
+                        edge_attr = edge_attr.unsqueeze(-1)
+                    ea = self.edge_emb(edge_attr)
 
-            src_global, dst_global = edge_index[0], edge_index[1]
-            edge_batch = batch[src_global]
-            _, counts = torch.unique_consecutive(batch, return_counts=True)
-            offsets = torch.zeros(B, device=batch.device, dtype=torch.long)
-            offsets[1:] = counts.cumsum(0)[:-1]
-            src_local = src_global - offsets[edge_batch]
-            dst_local = dst_global - offsets[edge_batch]
-            e_dense[edge_batch, src_local, dst_local] = ea
+                src_global, dst_global = edge_index[0], edge_index[1]
+                edge_batch = batch[src_global]
+                _, counts = torch.unique_consecutive(batch, return_counts=True)
+                offsets = torch.zeros(B, device=batch.device, dtype=torch.long)
+                offsets[1:] = counts.cumsum(0)[:-1]
+                src_local = src_global - offsets[edge_batch]
+                dst_local = dst_global - offsets[edge_batch]
+                e_dense[edge_batch, src_local, dst_local] = ea
 
-        if hasattr(batch_data, 'rrwp_edge') and batch_data.rrwp_edge is not None:
-            rrwp_pe = self.pe_edge_enc(batch_data.rrwp_edge)
-            _, counts = torch.unique_consecutive(batch, return_counts=True)
-            offset = 0
-            for b_idx in range(B):
-                n = counts[b_idx].item()
-                e_dense[b_idx, :n, :n] = e_dense[b_idx, :n, :n] + rrwp_pe[offset:offset + n * n].reshape(n, n, self.hidden_dim)
-                offset += n * n
+            if hasattr(batch_data, 'rrwp_edge') and batch_data.rrwp_edge is not None:
+                rrwp_pe = self.pe_edge_enc(batch_data.rrwp_edge)
+                _, counts = torch.unique_consecutive(batch, return_counts=True)
+                offset = 0
+                for b_idx in range(B):
+                    n = counts[b_idx].item()
+                    e_dense[b_idx, :n, :n] = e_dense[b_idx, :n, :n] + rrwp_pe[offset:offset + n * n].reshape(n, n, self.hidden_dim)
+                    offset += n * n
 
         deg = degree(edge_index[0], num_nodes=x.size(0)).float()
         log_deg = torch.log(1.0 + deg)
         log_deg_dense, _ = to_dense_batch(log_deg.unsqueeze(-1), batch)
 
+        vnode_cols = None
+        if self.sink_bias_param is not None and self.has_vnode:
+            vnode_cols = node_mask.sum(dim=1) - 1     # vnode is the last real node per graph
+
         if collect_diagnostics:
             self.layer_data = [{'h': x.detach().cpu(), 'batch': batch.detach().cpu()}]
             self.attn_weights = []
+            self.attn_logits = []
+            self.value_norms = []
+            for layer in self.layers:
+                layer.mha.collect_extra = True
 
         for layer_idx, layer in enumerate(self.layers):
-            x_dense, e_dense = layer(x_dense, e_dense, node_mask, log_deg_dense)
+            x_dense, e_dense = layer(x_dense, e_dense, node_mask, log_deg_dense,
+                                     vnode_cols=vnode_cols, sink_bias=self.sink_bias_param)
             if collect_diagnostics:
                 x_flat = x_dense[node_mask]
                 self.layer_data.append({'h': x_flat.detach().cpu(), 'batch': batch.detach().cpu()})
                 self.attn_weights.append(layer._attn_weights.detach().cpu())
+                self.attn_logits.append(layer.mha._attn_logits)
+                self.value_norms.append(layer.mha._value_norms)
+
+        if collect_diagnostics:
+            for layer in self.layers:
+                layer.mha.collect_extra = False
 
         x_flat = x_dense[node_mask]
 

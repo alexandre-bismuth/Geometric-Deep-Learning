@@ -1,0 +1,1 @@
+eval configs/zinc_gps_vnode_perecomp.yaml full randinit1

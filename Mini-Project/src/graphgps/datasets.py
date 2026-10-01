@@ -53,10 +53,10 @@ def _build_vnode_transform(config):
     return None
 
 
-def _pe_cache_path(data_root, dataset_name, split, pe_type, pe_dim):
+def _pe_cache_path(data_root, dataset_name, split, pe_type, pe_dim, cache_tag=''):
     cache_dir = os.path.join(data_root, 'pe_cache')
     os.makedirs(cache_dir, exist_ok=True)
-    return os.path.join(cache_dir, f'{dataset_name}_{split}_{pe_type}{pe_dim}.pt')
+    return os.path.join(cache_dir, f'{dataset_name}_{split}_{pe_type}{pe_dim}{cache_tag}.pt')
 
 
 def _load_raw_dataset(dataset_name, data_root, split):
@@ -68,19 +68,22 @@ def _load_raw_dataset(dataset_name, data_root, split):
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
 
-def _precompute_pe(dataset_name, data_root, split, pe_transform, pe_type, pe_dim):
-    cache_path = _pe_cache_path(data_root, dataset_name, split, pe_type, pe_dim)
+def _precompute_pe(dataset_name, data_root, split, pe_transform, pe_type, pe_dim,
+                   cache_tag='', pre_transform=None):
+    cache_path = _pe_cache_path(data_root, dataset_name, split, pe_type, pe_dim, cache_tag)
 
     if os.path.exists(cache_path):
         print(f"  Loading cached PE for {dataset_name}/{split} from {cache_path}")
         return torch.load(cache_path, weights_only=False)
 
-    print(f"  Precomputing {pe_type}(dim={pe_dim}) for {dataset_name}/{split}...")
+    print(f"  Precomputing {pe_type}(dim={pe_dim}){cache_tag} for {dataset_name}/{split}...")
     raw_ds = _load_raw_dataset(dataset_name, data_root, split)
 
     cached_data = []
     for i in tqdm(range(len(raw_ds)), desc=f'  {split}'):
         data = raw_ds[i].clone()
+        if pre_transform is not None:
+            data = pre_transform(data)   # e.g. vnode BEFORE PE (E6 'recomputed' mode)
         if pe_transform is not None:
             data = pe_transform(data)
         cached_data.append(data)
@@ -114,16 +117,25 @@ def get_datasets(config):
 
     pe_transform = _build_pe_transform(config)
     vnode_transform = _build_vnode_transform(config)
+    vnode_cfg = config.get('vnode', {})
+    vnode_pe_recomputed = (vnode_cfg.get('enabled', False)
+                          and vnode_cfg.get('pe_mode', 'padded') == 'recomputed')
 
     datasets = {}
     for split in ['train', 'val', 'test']:
         if pe_transform is not None:
-            data_list = _precompute_pe(dataset_name, data_root, split, pe_transform, pe_type, pe_dim)
+            if vnode_pe_recomputed:
+                data_list = _precompute_pe(dataset_name, data_root, split, pe_transform,
+                                           pe_type, pe_dim, cache_tag='_vnodepe',
+                                           pre_transform=vnode_transform)
+            else:
+                data_list = _precompute_pe(dataset_name, data_root, split, pe_transform, pe_type, pe_dim)
         else:
             raw_ds = _load_raw_dataset(dataset_name, data_root, split)
             data_list = [raw_ds[i] for i in range(len(raw_ds))]
 
-        datasets[split] = PrecomputedDataset(data_list, transform=vnode_transform)
+        item_transform = None if vnode_pe_recomputed else vnode_transform
+        datasets[split] = PrecomputedDataset(data_list, transform=item_transform)
 
     info = DATASET_INFO[dataset_name].copy()
     if config['vnode']['enabled'] and info['num_node_types'] is not None:
