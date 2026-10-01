@@ -45,7 +45,12 @@ def main():
     p.add_argument('--ckpt', default='best_model.pt')
     p.add_argument('--sizes', default='8,12,16,20,24')
     p.add_argument('--device', default=None)
+    p.add_argument('--fp64', action='store_true',
+                   help='run in float64 (separates float32 rounding from equivariance violations); '
+                        'writes symmetry_probe_fp64.json')
     args = p.parse_args()
+    if args.fp64:
+        torch.set_default_dtype(torch.float64)
 
     device = torch.device(args.device) if args.device else \
         torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -55,6 +60,8 @@ def main():
     state = torch.load(os.path.join(args.run_dir, args.ckpt), map_location=device,
                        weights_only=True)
     model.load_state_dict(state)
+    if args.fp64:
+        model.double()
     model.eval()
     model._register_attn_hooks()
 
@@ -68,7 +75,7 @@ def main():
     vnode_first = vnode_t is not None and vnode_cfg.get('pe_mode', 'padded') == 'recomputed'
 
     out = {'run_dir': args.run_dir, 'pe_type': config['pe']['type'],
-           'vnode': vnode_t is not None,
+           'vnode': vnode_t is not None, 'dtype': 'float64' if args.fp64 else 'float32',
            'vnode_pe_mode': (vnode_cfg.get('pe_mode', 'padded') if vnode_t is not None else None),
            'sizes': {}}
     with torch.no_grad():
@@ -80,6 +87,10 @@ def main():
                 g = pe_t(g)
             if vnode_t is not None and not vnode_first:
                 g = vnode_t(g)
+            if args.fp64:
+                for key in g.keys():
+                    if torch.is_tensor(g[key]) and g[key].is_floating_point():
+                        g[key] = g[key].double()
             batch = Batch.from_data_list([g]).to(device)
             _ = model(batch, collect_diagnostics=True)
             if vnode_t is None:
@@ -122,9 +133,10 @@ def main():
                 print(f"n={n:3d} 1/N={1.0/N:.4f} s_vnode={worst_vn:.4f} "
                       f"real_max_s={worst_real:.4f} orbit_dev={worst_dev:.2e}")
 
-    with open(os.path.join(args.run_dir, 'symmetry_probe.json'), 'w') as f:
+    fn = os.path.join(args.run_dir, 'symmetry_probe_fp64.json' if args.fp64 else 'symmetry_probe.json')
+    with open(fn, 'w') as f:
         json.dump(out, f, indent=1)
-    print('saved', os.path.join(args.run_dir, 'symmetry_probe.json'))
+    print('saved', fn)
 
 
 if __name__ == '__main__':

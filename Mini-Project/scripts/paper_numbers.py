@@ -295,7 +295,7 @@ def main():
     # ---------------------------------------------------------------- saturation (GRIT, _cr)
     up, rz, lin, up1, rz1 = [], [], [], [], []
     rows = []
-    for k in ('grit', 'gritvn', 'entone', 'dotlogit', 'blind', 'official'):
+    for k in ('grit', 'gritvn', 'entone', 'dotlogit', 'blind', 'official', 'noclamp'):
         per_layer = defaultdict(lambda: ([], [], []))
         for d in arm[k]['runs']:
             cr = load(os.path.join(d, 'eval_summary_cr.json')) or load(os.path.join(d, 'eval_summary.json'))
@@ -349,14 +349,15 @@ def main():
             O.m(f'PVN{k}', pm(pvn, 2), 'P(VN is the argmax) at the peak layer')
             O.m(f'VRvn{k}', pm(rvn, 2), 'value ratio when the VN is the argmax')
             O.m(f'VRreal{k}', pm(rreal, 2), 'value ratio when a real atom is the argmax')
-        rows.append(f'{LABEL[k]} & ${pm(rp, 2)}$ & ' + (f'${pm(pvn, 2)}$ & ${pm(rvn, 2) or "--"}$ & ${pm(rreal, 2)}$'
+        rows.append(f'{LABEL[k]} & ${pm(rp, 2)}$ & ' + (f'${pm(pvn, 2)}$ & ' + (f'${pm(rvn, 2)}$' if pm(rvn, 2) else '--') + f' & ${pm(rreal, 2)}$'
                                                       if pvn else '-- & -- & --') + r' \\')
     tabs['tab_noop'] = rows
 
     # ---------------------------------------------------------------- norm intervention
     rows = []
     rhos = ('1.0', '2.0', '8.0', '32.0')
-    for k in ('grit', 'gritvn', 'dotlogit', 'gritdot', 'dotbias', 'gps', 'gpsnone', 'gpsvn'):
+    for k in ('grit', 'noclamp', 'official', 'blind', 'gritvn', 'dotlogit', 'gritdot', 'dotbias', 'gps', 'gpsnone',
+              'gpsvn'):
         per = defaultdict(lambda: defaultdict(lambda: ([], [])))
         for d in arm[k]['runs']:
             x = load(os.path.join(d, 'norm_intervention.json'))
@@ -379,6 +380,8 @@ def main():
         O.m(f'NInsmax{k}', rnd(max(ns32), 1), 'median n*s at rho=32, max over layers')
         O.m(f'NIhftwo{k}', f'{rnd(100 * min(hf2), 0)}--{rnd(100 * max(hf2), 0)}', '% heads > eps at rho=2, layer range')
         O.m(f'NIhfeight{k}', f'{rnd(100 * min(hf8), 0)}--{rnd(100 * max(hf8), 0)}', '% heads > eps at rho=8')
+        O.m(f'NIhftwomax{k}', rnd(100 * max(hf2), 1), '% heads > eps at rho=2, max over layers')
+        O.m(f'NIhfeightmax{k}', rnd(100 * max(hf8), 1), '% heads > eps at rho=8, max over layers')
     tabs['tab_normint'] = rows
     hf8_dot = []
     for k in ('dotlogit', 'gritdot', 'dotbias', 'gps', 'gpsnone', 'gpsvn'):
@@ -435,10 +438,10 @@ def main():
     O.m('ORBVIOLrest', str(int(sum(allv(viol, skip=('dotbias',))))), 'violations, other equivariant runs')
     O.m('NHEAD', f'{nhead:,}'.replace(',', '{,}'), 'head instances certified in total')
 
-    def probe(k):
+    def probe(k, fn='symmetry_probe.json'):
         dev, sv, mx = [], [], []
         for d in arm[k]['runs']:
-            p = load(os.path.join(d, 'symmetry_probe.json'))
+            p = load(os.path.join(d, fn))
             if not p:
                 continue
             dev.append(max(x['max_abs_deviation'] for x in p['sizes'].values()))
@@ -449,7 +452,7 @@ def main():
     sci = lambda x: f'{x:.1e}'.replace('e-0', '\\times10^{-').replace('e-', '\\times10^{-') + '}'
     dev_novn, dev_vn = [], []
     for k in ('grit', 'gritdot', 'gps', 'gpsnone', 'gpsgated', 'gpsvn', 'gpsvnpe', 'gritvn',
-              'gritvnbias', 'gritvnpe', 'entone', 'enttwo', 'dotlogit', 'blind', 'noclamp', 'official'):
+              'gritvnbias', 'gritvnpe', 'entone', 'enttwo', 'blind', 'noclamp', 'official'):
         dev, sv, mx = probe(k)
         (dev_vn if 'vn' in k else dev_novn).extend(dev)
         if sv:
@@ -457,6 +460,11 @@ def main():
     O.m('PROBEdevmax', sci(max(dev_novn)), 'probe: worst deviation, equivariant-PE arms without VN, except dotbias')
     O.m('PROBEdevvn', sci(max(dev_vn)), 'probe: worst real-node deviation, VN arms')
     O.m('PROBEdevdotbias', sci(max(probe('dotbias')[0])), 'probe: GRIT-dotbias worst deviation')
+    O.m('PROBEdevdotlogit', rnd(max(probe('dotlogit')[0]), 2), 'probe: GRIT-dotlogit worst deviation (float32)')
+    fp = probe('dotbias', 'symmetry_probe_fp64.json')[0] + probe('dotlogit', 'symmetry_probe_fp64.json')[0]
+    O.m('PROBEfpdot', sci(max(fp)) if fp else None, 'probe in float64: worst deviation, GRIT-dotbias and GRIT-dotlogit')
+    fpb = probe('dotbias', 'symmetry_probe_fp64.json')[0]
+    O.m('PROBEfpdotbias', sci(max(fpb)) if fpb else None, 'probe in float64: GRIT-dotbias worst deviation')
     dev, _, mx = probe('lappe')
     O.m('PROBElappe', pm(mx, 3), 'probe: LapPE max s')
 

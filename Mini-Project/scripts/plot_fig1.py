@@ -69,15 +69,17 @@ def main():
         ax.set_aspect('equal')
         ax.axis('off')
         sr = p.get('graph_sink_rate', p.get('argmax_frac_heads_above_eps'))
-        ax.text(0.5, -0.04, p['label'], transform=ax.transAxes, ha='center', va='top',
+        ax.annotate(p['label'], (0.5, 0.0), xycoords='axes fraction', xytext=(0, -2),
+                    textcoords='offset points', ha='center', va='top',
                 fontsize=7.5, fontweight='bold')
-        ax.text(0.5, -0.17, subs[i], transform=ax.transAxes, ha='center', va='top', fontsize=6.5,
+        ax.annotate(subs[i], (0.5, 0.0), xycoords='axes fraction', xytext=(0, -11),
+                    textcoords='offset points', ha='center', va='top', fontsize=6.5,
                 color='0.25')
-        ax.text(0.5, -0.29,
-                f"layer {p['peak_layer']}: max $s_j$ = {p['argmax_s_headmean']:.2f} "
-                f"($n s_j$ = {n * p['argmax_s_headmean']:.1f})\n"
+        ax.annotate(
+                f"layer {p['peak_layer']}: peak $n s_j$ = {n * p['argmax_s_headmean']:.1f}\n"
                 f"{100 * sr:.0f}% of heads with $s_j>\\varepsilon$",
-                transform=ax.transAxes, ha='center', va='top', fontsize=5.8, color='0.25',
+                (0.5, 0.0), xycoords='axes fraction', xytext=(0, -20), textcoords='offset points',
+                ha='center', va='top', fontsize=5.8, color='0.25',
                 linespacing=1.3)
 
     cax = fig.add_subplot(gs[0, k])
