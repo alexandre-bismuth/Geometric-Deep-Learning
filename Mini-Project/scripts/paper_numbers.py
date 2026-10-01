@@ -147,6 +147,13 @@ def main():
             O.m(f'{tag}sn{k}', pm(r[key]['s/n'], 2), f'{key} sink/none')
             O.m(f'{tag}rn{k}', pm(r[key]['r/n'], 2), f'{key} random/none')
 
+    DOTARMS = ('gritdot', 'dotbias', 'gps', 'gpsnone', 'gpsgated', 'lappe', 'gpsvn', 'gpsvnpe', 'dotlogit', 'plusdot')
+    dm = [np.mean(arm[k]['sr']) for k in DOTARMS if arm[k]['sr']]
+    O.m('SRdotmin', rnd(min(dm), 2), 'min arm-mean sink rate over dot-product arms')
+    O.m('SRdotmax', rnd(max(dm), 2), 'max arm-mean sink rate over dot-product arms')
+    sa = [np.mean(arm[k]['ablnr']['s/r']) for k in DOTARMS if arm[k]['ablnr']['s/r']]
+    O.m('ABsrdotmin', rnd(min(sa), 2), 'min arm-mean no-renorm sink/random over dot-product arms')
+    O.m('ABsrdotmax', rnd(max(sa), 2), 'max arm-mean no-renorm sink/random over dot-product arms')
     # full ZINC table: arm & n & SR & MAE & n*s & no-renorm s/n r/n s/r & renorm s/r
     rows = []
     for k in FULL_ORDER:
@@ -373,6 +380,17 @@ def main():
         O.m(f'NIhftwo{k}', f'{rnd(100 * min(hf2), 0)}--{rnd(100 * max(hf2), 0)}', '% heads > eps at rho=2, layer range')
         O.m(f'NIhfeight{k}', f'{rnd(100 * min(hf8), 0)}--{rnd(100 * max(hf8), 0)}', '% heads > eps at rho=8')
     tabs['tab_normint'] = rows
+    hf8_dot = []
+    for k in ('dotlogit', 'gritdot', 'dotbias', 'gps', 'gpsnone', 'gpsvn'):
+        vals = []
+        for d in arm[k]['runs']:
+            x = load(os.path.join(d, 'norm_intervention.json'))
+            if x:
+                vals.append(min(v['8.0']['frac_heads_above_eps_mean'] for v in x['layers'].values()))
+        if vals:
+            hf8_dot.append(np.mean(vals))
+    O.m('NIhfeightmindot', rnd(100 * min(hf8_dot), 0) if hf8_dot else None,
+        '% heads > eps at rho=8: min over dot-product arms (and over layers 3/5/8; seed mean of per-seed minima)')
 
     # ---------------------------------------------------------------- LM reference
     lm = load(os.path.join(args.outputs, 'lm_reference', 'lm_sink_reference.json'))
