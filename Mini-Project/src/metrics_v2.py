@@ -196,12 +196,22 @@ def compute_value_stats(value_norms, sink_node):
     }
 
 
+def compute_consensus_residual(Hf):
+    """Token-uniformity residual ||X - 1 xbar^T||_F / ||X||_F (Dong et al., 2021): 0 when every
+    node carries the same representation (complete over-mixing), 1 when the mean is zero."""
+    tot = Hf.pow(2).sum().sqrt().item()
+    if tot < 1e-12:
+        return float('nan')
+    return (Hf - Hf.mean(dim=0, keepdim=True)).pow(2).sum().sqrt().item() / tot
+
+
 def compute_all_metrics_v2(H_graph, edge_index_local, attn=None, logits=None,
                            value_norms=None, vnode_idx=None, spectra=True):
     Hf = H_graph.float()
     result = {
         'matrix_entropy': compute_matrix_entropy(Hf),
         'anisotropy': compute_anisotropy(Hf),
+        'consensus_residual': compute_consensus_residual(Hf),
         'num_nodes': int(Hf.shape[0]),
     }
     result.update(compute_norm_stats_v2(Hf))

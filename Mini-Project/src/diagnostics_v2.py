@@ -49,6 +49,7 @@ def run_diagnostics_v2(model, loader, device, max_graphs=None, spectra=True,
 
         attn_logits = getattr(model, 'attn_logits', None)
         value_norms = getattr(model, 'value_norms', None)
+        clamp_fracs = getattr(model, 'clamp_fracs', None)   # per layer (B,) or None
         can_offline = hasattr(model, 'compute_logits_values')
 
         for g in range(len(counts)):
@@ -83,6 +84,11 @@ def run_diagnostics_v2(model, loader, device, max_graphs=None, spectra=True,
                 m = compute_all_metrics_v2(Hg, local_ei, attn=attn_g, logits=logits_g,
                                            value_norms=vnorm_g, vnode_idx=vnode_idx,
                                            spectra=spectra)
+                if l > 0 and clamp_fracs is not None and l - 1 < len(clamp_fracs) \
+                        and clamp_fracs[l - 1] is not None:
+                    for k_, v_ in clamp_fracs[l - 1].items():
+                        if v_ is not None and g < len(v_):
+                            m[k_] = float(v_[g])
                 results[l].append(m)
             processed += 1
 

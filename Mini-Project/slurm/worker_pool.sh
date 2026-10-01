@@ -5,6 +5,8 @@
 #   eval  <run-dir | config.yaml> <full|N> <trained|randinitS>
 #   perturb <run-dir>
 #   ablate  <run-dir>
+#   ablatenr <run-dir>                 (camera-ready: ablation without row renormalisation)
+#   evalmode <run-dir> <attn_mode>     (camera-ready: eval a GRIT ckpt under another scoring path)
 # Claims are mkdir-atomic (NFS-safe) under manifests/claims/<md5-of-line>.
 # An rc file in a claim dir means "hands off": reap_stale skips it and no worker will
 # re-claim it. Writing a sentinel rc (`INFLIGHT-noreap ...`) into a LIVE claim is therefore
@@ -102,6 +104,8 @@ run_task() {
       ;;
     perturb) python -u scripts/run_perturbation.py --run-dir "$1" ;;
     ablate)  python -u scripts/run_sink_ablation.py --run-dir "$1" ;;
+    ablatenr) python -u scripts/run_sink_ablation.py --run-dir "$1" --no-renorm ;;
+    evalmode) python -u scripts/run_eval_suite.py --run-dir "$1" --attn-mode "$2" --no-spectra ;;
     cert)    python -u scripts/run_theory_certificate.py --run-dir "$1" ;;
     probe)   python -u scripts/run_symmetry_probe.py --run-dir "$1" ;;
     *) echo "unknown task type: $TYPE"; return 2 ;;
@@ -156,7 +160,7 @@ worker() {
     # Analysis task on a run that has not finished training yet: release and retry later,
     # never score a half-trained checkpoint.
     case "$claimed" in
-      eval\ outputs/*|cert\ outputs/*|probe\ outputs/*|perturb\ outputs/*|ablate\ outputs/*)
+      eval\ outputs/*|cert\ outputs/*|probe\ outputs/*|perturb\ outputs/*|ablate\ outputs/*|ablatenr\ outputs/*|evalmode\ outputs/*)
         local rundir=${claimed#* }; rundir=${rundir%% *}
         # ALLOW_PARTIAL: escape hatch for a run the walltime killed. Every analysis script
         # scores best_model.pt anyway, so a run stopped at e.g. 1900/2000 epochs is still

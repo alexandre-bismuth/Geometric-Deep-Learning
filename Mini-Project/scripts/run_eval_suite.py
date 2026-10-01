@@ -9,6 +9,10 @@ Usage:
   python scripts/run_eval_suite.py --run-dir outputs/zinc-grit
   python scripts/run_eval_suite.py --run-dir outputs/zinc-grit --randinit --seed 0
   python scripts/run_eval_suite.py --run-dir outputs/peptides-grit-Q4 --max-graphs 200
+  # camera-ready: evaluate a trained GRIT checkpoint under a different scoring path
+  # (no retraining; parameters are shared across the GRIT family). Writes
+  # eval_suite_<suffix>.pkl / eval_summary_<suffix>.json / metrics_<suffix>.json only.
+  python scripts/run_eval_suite.py --run-dir outputs/zinc-grit-s0 --attn-mode grit_noclamp
 """
 import argparse
 import json
@@ -81,6 +85,8 @@ def main():
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--no-spectra', action='store_true')
     p.add_argument('--device', default=None)
+    p.add_argument('--attn-mode', default=None,
+                   help='override model.attn_mode at evaluation time (GRIT family only)')
     args = p.parse_args()
 
     device = torch.device(args.device) if args.device else \
@@ -93,6 +99,8 @@ def main():
         tag = os.path.splitext(os.path.basename(args.config))[0]
         args.run_dir = os.path.join('outputs', f'randinit-{tag}')
         os.makedirs(args.run_dir, exist_ok=True)
+    if args.attn_mode is not None:
+        config.setdefault('model', {})['attn_mode'] = args.attn_mode
     arch = detect_arch(config)
     has_vnode = config.get('vnode', {}).get('enabled', False)
     task = config['architecture']['task']
@@ -105,6 +113,8 @@ def main():
     suffix = ''
     if args.randinit:
         suffix = f'_randinit_s{args.seed}'
+    if args.attn_mode is not None:
+        suffix += f'_eval{args.attn_mode}'
     else:
         ckpt_path = os.path.join(args.run_dir, args.ckpt)
         state = torch.load(ckpt_path, map_location=device, weights_only=True)
@@ -119,7 +129,9 @@ def main():
         metrics = {'test_loss': float(test_loss), f'test_{metric_name}': float(test_metric),
                    'metric_name': metric_name, 'n_params': int(n_params),
                    'ckpt': args.ckpt}
-        with open(os.path.join(args.run_dir, 'metrics.json'), 'w') as f:
+        if args.attn_mode is not None:
+            metrics['eval_attn_mode'] = args.attn_mode
+        with open(os.path.join(args.run_dir, f'metrics{suffix}.json'), 'w') as f:
             json.dump(metrics, f, indent=1)
         print(f"task metrics: {metrics}")
 

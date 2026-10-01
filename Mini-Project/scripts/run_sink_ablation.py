@@ -11,6 +11,11 @@ module's own parameters (equivalence-checked against the stock forward on the fi
 graph). GRIT: uses the built-in mha.ablate_node hook.
 
 Usage: python scripts/run_sink_ablation.py --run-dir outputs/zinc-graphgps [--n-graphs 500]
+       python scripts/run_sink_ablation.py --run-dir outputs/zinc-graphgps --no-renorm
+--no-renorm (camera-ready): zero the column but do NOT renormalise the rows, i.e. delete
+the node's value contribution while leaving every other weight unchanged. Renormalised
+ablation asks "does the model need somewhere to put this attention?"; the un-renormalised
+one asks "does this node's value carry content?". Output: sink_ablation_norenorm_s<seed>.json.
 """
 import argparse
 import json
@@ -28,7 +33,7 @@ from src.seed import set_seed
 from src.metrics_v2 import compute_dirichlet_v2
 from scripts.run_eval_suite import load_run_config, detect_arch, build_everything
 
-_ABLATE_COL = {'col': None}
+_ABLATE_COL = {'col': None, 'renorm': True}
 
 
 def _patch_gps_mha(model):
@@ -62,7 +67,8 @@ def _patch_gps_mha(model):
                         if col is not None:
                             w = w.clone()
                             w[..., col] = 0.0
-                            w = w / w.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                            if _ABLATE_COL['renorm']:
+                                w = w / w.sum(dim=-1, keepdim=True).clamp_min(1e-12)
                         out = torch.matmul(w, v)
                         out = out.transpose(1, 2).reshape(B, N, D)
                         out = mha.out_proj(out)
@@ -90,7 +96,9 @@ def main():
     p.add_argument('--n-graphs', type=int, default=500)
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--device', default=None)
+    p.add_argument('--no-renorm', action='store_true')
     args = p.parse_args()
+    _ABLATE_COL['renorm'] = not args.no_renorm
 
     device = torch.device(args.device) if args.device else \
         torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -117,6 +125,7 @@ def main():
         else:
             for layer in model.layers:
                 layer.mha.ablate_node = col
+                layer.mha.ablate_renorm = not args.no_renorm
 
     originals = _patch_gps_mha(model) if arch == 'gps' else []
 
@@ -182,7 +191,7 @@ def main():
     model._remove_attn_hooks()
 
     y = torch.cat(targets)
-    result = {'n_graphs': len(targets), 'conditions': {}}
+    result = {'n_graphs': len(targets), 'renorm': not args.no_renorm, 'conditions': {}}
     for c in conds:
         ph = torch.cat([p_.view(-1) for p_ in preds[c]])
         if task == 'regression':
@@ -195,7 +204,8 @@ def main():
             mname: metric,
             'dirichlet_per_edge_final': float(np.mean(dirich[c])),
         }
-    path = os.path.join(args.run_dir, f'sink_ablation_s{args.seed}.json')
+    tag = 'sink_ablation_norenorm' if args.no_renorm else 'sink_ablation'
+    path = os.path.join(args.run_dir, f'{tag}_s{args.seed}.json')
     with open(path, 'w') as f:
         json.dump(result, f, indent=1)
     print(json.dumps(result['conditions'], indent=1))

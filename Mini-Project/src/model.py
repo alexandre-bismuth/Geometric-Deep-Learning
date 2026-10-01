@@ -13,11 +13,25 @@ class GritMultiHeadAttention(nn.Module):
 
     attn_mode:
       'grit'     — signed-sqrt edge-conditioned scoring (original; default; state-dict
-                   identical to v1, so old checkpoints load unchanged)
+                   identical to v1, so old checkpoints load unchanged). Clamps each
+                   coordinate of the score to [-5, 5] before the ReLU, so e_hat in [0, 5]^h.
       'dot_bias' — scaled dot-product logits + additive edge/RRWP bias (Graphormer-style);
                    plain values (no edge-value channel)
       'dot'      — scaled dot-product only; no edge conditioning anywhere
+
+    Camera-ready scoring dial (all share the 'grit' parameter set, so a 'grit'
+    checkpoint loads into any of them):
+      'grit_dotlogit' — GRIT with ONLY the logit replaced: logit = q.k/sqrt(h). e_hat is
+                        still computed as in GRIT and still feeds the values (VeRow) and
+                        the next layer's edge stream. W_A exists but is unused.
+      'grit_plusdot'  — logit = W_A(e_hat) + q.k/sqrt(h): GRIT's score plus an unbounded
+                        dot-product term.
+      'grit_noclamp'  — GRIT without any clamp: e_hat = ReLU(ssq(.) + b), unbounded.
+      'grit_official' — clamp placement of the official GRIT code (LiamMa/GRIT): e_hat
+                        unclipped, scalar logit clamped to [-5, 5] after the readout.
     """
+
+    GRIT_FAMILY = ('grit', 'grit_dotlogit', 'grit_plusdot', 'grit_noclamp', 'grit_official')
 
     def __init__(self, hidden_dim, num_heads, attn_dropout=0.0, attn_mode='grit'):
         super().__init__()
@@ -29,7 +43,7 @@ class GritMultiHeadAttention(nn.Module):
         self.W_Q = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.W_K = nn.Linear(hidden_dim, hidden_dim, bias=True)
         self.W_V = nn.Linear(hidden_dim, hidden_dim, bias=True)
-        if attn_mode == 'grit':
+        if attn_mode in self.GRIT_FAMILY:
             self.W_E = nn.Linear(hidden_dim, hidden_dim * 2, bias=True)
             self.W_VeRow = nn.Linear(hidden_dim, hidden_dim, bias=True)
             self.W_A = nn.Linear(h, 1, bias=False)
@@ -45,9 +59,11 @@ class GritMultiHeadAttention(nn.Module):
         self.collect_extra = False       # stash logits / value norms / clamp frac
         self.entropy_track = False       # accumulate row-entropy (E5b forcing)
         self.ablate_node = None          # E5a: zero this key column + renormalise
+        self.ablate_renorm = True        # False: zero the column WITHOUT renormalising rows
         self._attn_logits = None
         self._value_norms = None
-        self._clamp_frac = None
+        self._clamp_frac = None          # scalar, whole batch (legacy)
+        self._sat_stats = None           # dict name -> (B,) per-graph saturation fractions
         self._row_entropy = None
 
     def forward(self, x_dense, e, node_mask, vnode_cols=None, sink_bias=None):
@@ -60,17 +76,41 @@ class GritMultiHeadAttention(nn.Module):
         v = self.W_V(x_dense).reshape(B, N, H, h).permute(0, 2, 1, 3)
 
         e_hat = None
-        if self.attn_mode == 'grit':
+        if self.attn_mode in self.GRIT_FAMILY:
+            pair_valid = None
+            if self.collect_extra:
+                pair_valid = (node_mask.unsqueeze(1) & node_mask.unsqueeze(2))   # (B, N, N)
             qk = q.unsqueeze(3) + k.unsqueeze(2)
             e_proj = self.W_E(e).reshape(B, N, N, H, h * 2).permute(0, 3, 1, 2, 4)
             e_w = e_proj[..., :h]
             e_b = e_proj[..., h:]
             score = signed_sqrt(qk * e_w) + e_b
             if self.collect_extra:
-                self._clamp_frac = (score.abs() >= 5.0).float().mean().item()
-            score = torch.clamp(score, -5.0, 5.0)
+                # pre-clamp score coordinates: >= 5 hits the ceiling (e_hat saturates at 5);
+                # <= 0 is zeroed by the ReLU whatever the clamp does.
+                f = lambda t: self._masked_graph_mean(t.float().mean(dim=-1), pair_valid)
+                self._sat_stats = {'clamp_upper_frac': f(score >= 5.0),
+                                   'clamp_lower_frac': f(score <= -5.0),
+                                   'relu_zero_frac': f(score <= 0.0)}
+            if self.attn_mode in ('grit', 'grit_dotlogit', 'grit_plusdot'):
+                if self.collect_extra:
+                    self._clamp_frac = (score.abs() >= 5.0).float().mean().item()
+                    self._sat_stats['clamp_frac'] = self._masked_graph_mean(
+                        (score.abs() >= 5.0).float().mean(dim=-1), pair_valid)
+                score = torch.clamp(score, -5.0, 5.0)
             e_hat = F.relu(score)
-            attn_logits = self.W_A(e_hat).squeeze(-1)
+            if self.attn_mode == 'grit_dotlogit':
+                attn_logits = torch.matmul(q, k.transpose(-2, -1)) / (h ** 0.5)
+            else:
+                attn_logits = self.W_A(e_hat).squeeze(-1)
+                if self.attn_mode == 'grit_plusdot':
+                    attn_logits = attn_logits + torch.matmul(q, k.transpose(-2, -1)) / (h ** 0.5)
+                elif self.attn_mode == 'grit_official':
+                    if self.collect_extra:
+                        hit = (attn_logits.abs() >= 5.0).float()                 # (B, H, N, N)
+                        self._clamp_frac = hit.mean().item()
+                        self._sat_stats['logit_clamp_frac'] = self._masked_graph_mean(hit, pair_valid)
+                    attn_logits = torch.clamp(attn_logits, -5.0, 5.0)
         elif self.attn_mode == 'dot_bias':
             attn_logits = torch.matmul(q, k.transpose(-2, -1)) / (h ** 0.5)
             e_b = self.W_Eb(e).reshape(B, N, N, H, h).permute(0, 3, 1, 2, 4)
@@ -93,8 +133,9 @@ class GritMultiHeadAttention(nn.Module):
         if self.ablate_node is not None:
             w = attn_weights.clone()
             w[:, :, :, self.ablate_node] = 0.0
-            attn_weights = w / w.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-            attn_weights = attn_weights.masked_fill(~attn_mask.unsqueeze(1), 0.0)
+            if self.ablate_renorm:
+                w = w / w.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+            attn_weights = w.masked_fill(~attn_mask.unsqueeze(1), 0.0)
 
         if self.entropy_track:
             p = attn_weights.clamp_min(1e-10)
@@ -109,7 +150,7 @@ class GritMultiHeadAttention(nn.Module):
         attn_weights = self.attn_dropout(attn_weights)
 
         x_V = torch.matmul(attn_weights.unsqueeze(-2), v.unsqueeze(2)).squeeze(-2)
-        if self.attn_mode == 'grit':
+        if self.attn_mode in self.GRIT_FAMILY:
             e_weighted = attn_weights.unsqueeze(-1) * e_hat
             e_sum = e_weighted.sum(dim=3)
             x_attn = x_V + self.W_VeRow(e_sum.permute(0, 2, 1, 3).reshape(B, N, D)).reshape(B, N, H, h).permute(0, 2, 1, 3)
@@ -118,10 +159,19 @@ class GritMultiHeadAttention(nn.Module):
 
         x_out = self.W_O(x_attn.permute(0, 2, 1, 3).reshape(B, N, D))
         e_out = None
-        if self.attn_mode in ('grit', 'dot_bias'):
+        if self.attn_mode in self.GRIT_FAMILY + ('dot_bias',):
             e_out = self.W_Eo(e_hat.permute(0, 2, 3, 1, 4).reshape(B, N, N, D))
 
         return x_out, e_out, attn_weights
+
+    @staticmethod
+    def _masked_graph_mean(hit, pair_valid):
+        """hit: (B, H, N, N) in [0, 1]; pair_valid: (B, N, N) bool -> (B,) cpu tensor."""
+        if pair_valid is None:
+            return None
+        m = pair_valid.unsqueeze(1).to(hit.dtype)
+        return ((hit * m).sum(dim=(1, 2, 3)) /
+                (m.sum(dim=(1, 2, 3)) * hit.shape[1]).clamp_min(1)).detach().cpu()
 
 
 class GritTransformerLayer(nn.Module):
@@ -136,7 +186,7 @@ class GritTransformerLayer(nn.Module):
         self.deg_scaler_2 = nn.Parameter(torch.zeros(hidden_dim))
 
         self.bn_node_attn = nn.BatchNorm1d(hidden_dim)
-        if attn_mode in ('grit', 'dot_bias'):
+        if attn_mode in GritMultiHeadAttention.GRIT_FAMILY + ('dot_bias',):
             self.bn_edge = nn.BatchNorm1d(hidden_dim)
 
         self.ffn = nn.Sequential(
@@ -189,6 +239,12 @@ class InstrumentedGRIT(nn.Module):
         self.pool = config.get('model', {}).get('pool', 'mean')
         self.attn_mode = config.get('model', {}).get('attn_mode', 'grit')
         self.use_node_pe = config.get('model', {}).get('use_node_pe', True)
+        # 'full' (default): bond-type embeddings + RRWP pair encodings initialise the pair
+        # stream. 'none': pair stream starts at zero (GRIT-blind control, information-matched
+        # to the 'dot' arm, which sees neither bonds nor pair encodings).
+        self.edge_input = config.get('model', {}).get('edge_input', 'full')
+        assert self.edge_input in ('full', 'none'), self.edge_input
+        self._has_pair_stream = self.attn_mode in GritMultiHeadAttention.GRIT_FAMILY + ('dot_bias',)
         self.has_vnode = config.get('vnode', {}).get('enabled', False)
         use_sink_bias = config.get('model', {}).get('sink_bias', False)
         self.sink_bias_param = nn.Parameter(torch.zeros(())) if use_sink_bias else None
@@ -206,7 +262,7 @@ class InstrumentedGRIT(nn.Module):
 
         if self.use_node_pe:
             self.pe_node_enc = nn.Linear(pe_dim, hidden_dim)
-        if self.attn_mode in ('grit', 'dot_bias'):
+        if self._has_pair_stream and self.edge_input == 'full':
             self.pe_edge_enc = nn.Linear(pe_dim, hidden_dim)
 
         self.layers = nn.ModuleList([
@@ -229,6 +285,7 @@ class InstrumentedGRIT(nn.Module):
         self.attn_weights = []
         self.attn_logits = []
         self.value_norms = []
+        self.clamp_fracs = []          # per layer: dict name -> (B,) saturation fractions, or None
 
     def pop_attn_entropy(self):
         """E5b: mean attention row-entropy across layers from the last forward (with grad)."""
@@ -261,10 +318,10 @@ class InstrumentedGRIT(nn.Module):
         B, N_max, D = x_dense.shape
 
         e_dense = None
-        if self.attn_mode in ('grit', 'dot_bias'):
+        if self._has_pair_stream:
             e_dense = torch.zeros(B, N_max, N_max, self.hidden_dim, device=x.device)
 
-            if edge_attr is not None:
+            if edge_attr is not None and self.edge_input == 'full':
                 if self.input_type == 'categorical':
                     ea = self.edge_emb(edge_attr.squeeze(-1))
                 else:
@@ -283,7 +340,8 @@ class InstrumentedGRIT(nn.Module):
                 dst_local = dst_global - offsets[edge_batch]
                 e_dense[edge_batch, src_local, dst_local] = ea
 
-            if hasattr(batch_data, 'rrwp_edge') and batch_data.rrwp_edge is not None:
+            if self.edge_input == 'full' and hasattr(batch_data, 'rrwp_edge') \
+                    and batch_data.rrwp_edge is not None:
                 rrwp_pe = self.pe_edge_enc(batch_data.rrwp_edge)
                 _, counts = torch.unique_consecutive(batch, return_counts=True)
                 offset = 0
@@ -305,8 +363,10 @@ class InstrumentedGRIT(nn.Module):
             self.attn_weights = []
             self.attn_logits = []
             self.value_norms = []
+            self.clamp_fracs = []
             for layer in self.layers:
                 layer.mha.collect_extra = True
+                layer.mha._sat_stats = None
 
         for layer_idx, layer in enumerate(self.layers):
             x_dense, e_dense = layer(x_dense, e_dense, node_mask, log_deg_dense,
@@ -317,6 +377,7 @@ class InstrumentedGRIT(nn.Module):
                 self.attn_weights.append(layer._attn_weights.detach().cpu())
                 self.attn_logits.append(layer.mha._attn_logits)
                 self.value_norms.append(layer.mha._value_norms)
+                self.clamp_fracs.append(layer.mha._sat_stats)
 
         if collect_diagnostics:
             for layer in self.layers:

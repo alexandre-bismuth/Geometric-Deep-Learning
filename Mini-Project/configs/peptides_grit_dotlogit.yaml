@@ -1,0 +1,10 @@
+# Camera-ready (GDDL 2026): full-data Peptides-func GRIT with only the attention logit replaced by q.k/sqrt(h).
+experiment_id: peptides-grit-dotlogit
+
+model:
+  attn_mode: grit_dotlogit
+
+data:
+  node_count_filter:
+    min_nodes: 0
+    max_nodes: 300

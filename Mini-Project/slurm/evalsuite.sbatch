@@ -12,9 +12,9 @@
 set -uo pipefail
 umask 002
 
-MP=/home/u6gb/alexbismuth.u6gb/AlphaTrade/experiments/miscellaneous/Graph_Transformers/Mini-Project
+MP="${MP:-/home/u6gb/alexbismuth.u6gb/AlphaTrade/experiments/miscellaneous/Graph_Transformers/Mini-Project}"   # override with --export=ALL,MP=...
 cd "$MP"
-export PATH="$MP/../venv/bin:$PATH"
+export PATH="${VENV:-$MP/../venv}/bin:$PATH"
 export PYTHONUNBUFFERED=1
 export TMPDIR=/tmp
 export WANDB_MODE=disabled
