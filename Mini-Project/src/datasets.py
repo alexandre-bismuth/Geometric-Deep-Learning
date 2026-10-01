@@ -86,7 +86,8 @@ def _precompute_pe(dataset_name, data_root, split, pe_transform, pe_type, pe_dim
             data = pe_transform(data)
         cached_data.append(data)
 
-    torch.save(cached_data, cache_path)
+    torch.save(cached_data, cache_path + '.tmp')       # atomic: a killed build leaves no
+    os.replace(cache_path + '.tmp', cache_path)        # truncated cache behind
     print(f"  Saved to {cache_path}")
     return cached_data
 

@@ -102,13 +102,21 @@ stage_in() {   # Lustre run dir -> local, once per job per run (lock: mkdir is a
   rmdir "$LOCAL/locks/stage_$run"
 }
 
-analysis_ready() {   # 0 if the run an analysis line targets is fully trained
-  local run=$1 tk
+analysis_state() {   # ready | wait | dead  for the run an analysis line targets
+  # dead = its train failed (rc != 0) or ran out of attempts, or there is no train line in
+  # this queue and no trained checkpoint: the analysis can never run, so it is marked failed
+  # instead of keeping the pool alive until the walltime.
+  local run=$1 tk att
   tk=$(awk -F'\t' -v r="$run" '$1 == r {print $2; exit}' "$LOCAL/run2train.tsv")
   if [ -n "$tk" ]; then
-    [ -f "$MP/$STATE/$tk.rc" ] && [ "$(cut -d' ' -f1 "$MP/$STATE/$tk.rc")" = "0" ]
+    if [ -f "$MP/$STATE/$tk.rc" ]; then
+      [ "$(cut -d' ' -f1 "$MP/$STATE/$tk.rc")" = "0" ] && echo ready || echo dead
+      return
+    fi
+    att=$(cat "$MP/$STATE/$tk.attempts" 2>/dev/null | wc -l | tr -d ' ')
+    [ "${att:-0}" -ge "$MAX_ATTEMPTS" ] && echo dead || echo wait
   else
-    [ -f "$MP/outputs/$run/final_model.pt" ]
+    [ -f "$MP/outputs/$run/final_model.pt" ] && echo ready || echo dead
   fi
 }
 
@@ -146,7 +154,13 @@ worker() {   # worker <id> <gpu>
       case "$line" in
         train\ *) ;;
         *) run=${line#* }; run=${run%% *}; run=${run#outputs/}
-           if ! analysis_ready "$run"; then deferred=1; continue; fi ;;
+           case "$(analysis_state "$run")" in
+             ready) ;;
+             wait) deferred=1; continue ;;
+             dead) echo "98 parent-train-failed-or-missing job=$JOBTAG end=$(date +%F_%T)" \
+                        > "$MP/$STATE/$key.rc"
+                   echo "[w$wid] SKIP (parent train failed/missing) $line"; continue ;;
+           esac ;;
       esac
       if mkdir "$LOCAL/claims/$key" 2>/dev/null; then claimed=$line; break; fi
     done < "$MP/$QUEUE"
@@ -181,6 +195,13 @@ worker() {   # worker <id> <gpu>
     echo "[w$wid gpu$gpu] $(date +%F_%T) DONE rc=$rc $claimed"
     rsync -a "$LOCAL/logs/task_${tag}.log" "$MP/logs/cr_$JOBTAG/" 2>/dev/null
   done
+}
+
+bg_caches() {   # build caches for LATER jobs on the CPU while GPUs train (BG_CACHE_CONFIGS)
+  [ -n "${BG_CACHE_CONFIGS:-}" ] || return 0
+  # shellcheck disable=SC2086
+  ( cd "$MP" && nice -n 10 python -u scripts/build_caches.py $BG_CACHE_CONFIGS \
+      > "$LOCAL/logs/bg_caches.log" 2>&1; echo "bg cache build rc=$?" >> "$LOCAL/logs/bg_caches.log" ) &
 }
 
 start_pool() {

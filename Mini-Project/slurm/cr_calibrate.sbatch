@@ -17,6 +17,8 @@ cd "$MP" || exit 1
 export PATH="$VENV/bin:$PATH" PYTHONUNBUFFERED=1 WANDB_MODE=disabled MPLBACKEND=Agg
 python -c "import torch; assert torch.cuda.is_available(); print('cuda ok', torch.cuda.device_count())" || exit 2
 if [ "${SLURM_JOB_NUM_NODES:-1}" != "1" ]; then echo "REFUSING: more than one node"; exit 3; fi
+others=$(squeue -h -u "$USER" -n gddl-cr,gddl-cr-calib -t RUNNING,PENDING -o %i 2>/dev/null | grep -vx "${SLURM_JOB_ID:-x}" | wc -l)
+if [ "$others" -ne 0 ]; then echo "REFUSING: another gddl-cr job is queued or running"; exit 3; fi
 L="${LOCALDIR:-${TMPDIR:-/tmp}}/gddl_calib_${SLURM_JOB_ID:-local}"
 mkdir -p "$L/work/outputs" "$L/work/data/pe_cache" "$L/logs"
 for d in configs scripts src; do ln -s "$MP/$d" "$L/work/$d"; done

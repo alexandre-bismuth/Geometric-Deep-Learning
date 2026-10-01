@@ -4,7 +4,9 @@
 # Submit from $MP:
 #   cd "$MP" && sbatch --export=ALL,MP="$MP",VENV="$VENV"[,WORKERS_PER_GPU=2] slurm/cr_node.sbatch
 # Resubmit (only after the previous job has ENDED) until slurm/cr_status.sh shows nothing
-# pending; interrupted trains resume from their ckpt.pt.
+# pending; interrupted trains resume from their ckpt.pt. Optional env: QUEUE (default
+# manifests/camera_ready_q1.txt), WORKERS_PER_GPU, BG_CACHE_CONFIGS (configs whose PE caches
+# are built on the CPU in the background for a later job, e.g. configs/peptides_grit.yaml).
 #SBATCH --job-name=gddl-cr
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -31,7 +33,7 @@ fi
 
 # one-node / one-job guards
 if [ "${SLURM_JOB_NUM_NODES:-1}" != "1" ]; then echo "REFUSING: ${SLURM_JOB_NUM_NODES} nodes"; exit 3; fi
-others=$(squeue -h -u "$USER" -n gddl-cr -t RUNNING -o %i 2>/dev/null | grep -vx "${SLURM_JOB_ID:-x}" | wc -l)
+others=$(squeue -h -u "$USER" -n gddl-cr,gddl-cr-calib -t RUNNING,PENDING -o %i 2>/dev/null | grep -vx "${SLURM_JOB_ID:-x}" | wc -l)
 if [ "$others" -ne 0 ]; then echo "REFUSING: another gddl-cr job is running"; exit 3; fi
 
 source slurm/cr_pool.sh
@@ -63,6 +65,7 @@ on_term() { touch "$LOCAL/KILLED" "$LOCAL/STOP"; sync_all; }
 trap on_usr1 USR1
 trap on_term TERM
 
+bg_caches
 start_pool &
 POOL_PID=$!
 while kill -0 "$POOL_PID" 2>/dev/null; do wait "$POOL_PID"; done

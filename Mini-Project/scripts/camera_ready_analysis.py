@@ -13,6 +13,7 @@ Sections:
   H  size-binned sink rate inside the full-data Peptides models
   I  logit-norm slope per arm
   J  no-op test conditioned on who the sink is (VN vs real node; sink present or not)
+  K  sink ablation with vs. without row renormalisation
 
 Usage: python scripts/camera_ready_analysis.py [--outputs outputs] [-o report.md]
 """
@@ -320,6 +321,33 @@ def main():
                 rn.append(float(np.median(no)))
         if ps:
             L.append(f'| `{a}` | {ci(ps)} | {ci(rp)} | {ci(rn)} |')
+
+    # K
+    L.append('\n## K. Sink ablation with vs. without row renormalisation (500 test graphs, every layer)\n')
+    L.append('Ratios are test-MAE(condition) / test-MAE(none). "renorm": the ablated column is zeroed '
+             'and rows are renormalised (the submitted protocol: attention is redistributed to the '
+             'other nodes); "no-renorm": the column is zeroed only (the attention mass is removed).\n')
+    L.append('| arm | renorm sink/none | renorm random/none | renorm sink/random | no-renorm sink/none '
+             '| no-renorm random/none | no-renorm sink/random |')
+    L.append('|---|---|---|---|---|---|---|')
+    for a in sorted(arms):
+        if not a.startswith('zinc'):
+            continue
+        cols = [[] for _ in range(6)]
+        for r in arms[a]:
+            if is_legacy(r):
+                continue
+            for k, fn in ((0, 'sink_ablation_s0.json'), (3, 'sink_ablation_norenorm_s0.json')):
+                d = load(os.path.join(runs[r]['dir'], fn))
+                if not d:
+                    continue
+                c = d['conditions']
+                base = c['none']['mae']
+                cols[k].append(c['sink']['mae'] / base)
+                cols[k + 1].append(c['random']['mae'] / base)
+                cols[k + 2].append(c['sink']['mae'] / c['random']['mae'])
+        if any(cols):
+            L.append(f'| `{a}` | ' + ' | '.join(ci(c) for c in cols) + ' |')
 
     md = '\n'.join(L) + '\n'
     print(md)
