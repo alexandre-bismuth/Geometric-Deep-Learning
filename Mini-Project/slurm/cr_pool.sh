@@ -39,6 +39,8 @@ if [ -z "${LOCAL:-}" ]; then
   _base=$(pick_local_base) || { echo "no writable node-local dir"; exit 1; }
   LOCAL="$_base/gddl_cr_${SLURM_JOB_ID:-local}"
 fi
+# an inherited login-node TMPDIR breaks mktemp (e.g. in cr_status.sh); point it at the node-local base
+if ! { [ -n "${TMPDIR:-}" ] && [ -d "$TMPDIR" ] && [ -w "$TMPDIR" ]; }; then export TMPDIR="$(dirname "$LOCAL")"; fi
 JOBTAG="${SLURM_JOB_ID:-local}"
 
 key_of() { printf '%s' "$1" | md5sum | cut -d' ' -f1; }
