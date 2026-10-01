@@ -1,11 +1,21 @@
 #!/bin/bash
 # Progress of the camera-ready queue: one line per task (DONE rc / FAILED rc / RETRIES-EXHAUSTED /
-# STARTED n× / pending), then totals. Run from $MP:  bash slurm/cr_status.sh [--pending|--failed]
+# STARTED n× / pending), then totals. Run from $MP:
+#   bash slurm/cr_status.sh [--pending|--failed]
+#   bash slurm/cr_status.sh --done-runs   # outputs/<run> dirs touched by a DONE task (to git add)
 QUEUE="${QUEUE:-manifests/camera_ready_q1.txt}"
 STATE="${STATE:-manifests/cr1_state}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-6}"
 mode=${1:-all}
 nd=0; nf=0; np=0; nx=0
+out=$(mktemp)
+run_of_line() {   # outputs dir a queue line writes to
+  set -- $1
+  if [ "$1" = "train" ]; then
+    local id; id=$(awk '/^experiment_id:/ {print $2; exit}' "$3")
+    case "$id" in *-s"$4") echo "outputs/$id" ;; *) echo "outputs/$id-s$4" ;; esac
+  else echo "$2"; fi
+}
 while IFS= read -r line; do
   [ -z "$line" ] && continue
   case "$line" in \#*) continue ;; esac
@@ -19,7 +29,10 @@ while IFS= read -r line; do
   case "$mode" in
     --pending) case "$s" in pending*) echo "$s | $line" ;; esac ;;
     --failed)  case "$s" in FAILED*|RETRIES*) echo "$s | $line" ;; esac ;;
+    --done-runs) [ "$s" = "DONE" ] && run_of_line "$line" ;;
     *) echo "$s | $line" ;;
   esac
-done < "$QUEUE"
-echo "TOTAL done=$nd failed=$nf exhausted=$nx pending=$np"
+done < "$QUEUE" > "$out"
+if [ "$mode" = "--done-runs" ]; then sort -u "$out"; else cat "$out"
+  echo "TOTAL done=$nd failed=$nf exhausted=$nx pending=$np"; fi
+rm -f "$out"
