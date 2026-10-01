@@ -12,6 +12,7 @@ Sections:
   G  sink rate vs. test score across arms (rank correlation)
   H  size-binned sink rate inside the full-data Peptides models
   I  logit-norm slope per arm
+  J  no-op test conditioned on who the sink is (VN vs real node; sink present or not)
 
 Usage: python scripts/camera_ready_analysis.py [--outputs outputs] [-o report.md]
 """
@@ -28,7 +29,10 @@ import numpy as np
 
 T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365,
        8: 2.306, 9: 2.262, 10: 2.228}
-LEGACY = {'zinc-grit', 'zinc-grit-vnode', 'zinc-graphgps'}   # unsuffixed April runs
+def is_legacy(run):
+    """Unseeded runs (no -s<seed> suffix): the April zinc-grit / zinc-grit-vnode / zinc-graphgps
+    and the unmatched peptides-grit-Q1..Q4 quartiles. Excluded from every camera-ready number."""
+    return re.search(r'-s\d+$', run) is None
 
 
 def load(p):
@@ -98,7 +102,7 @@ def main():
     L.append('|---|---|---|---|---|')
     for a in sorted(arms):
         rs = arms[a]
-        seeded = [r for r in rs if r not in LEGACY]
+        seeded = [r for r in rs if not is_legacy(r)]
         f = lambda rr: [nanmax(runs[r]['agg']['overall_sink_rate']['mean']) for r in rr]
         g = lambda rr: [score(r) for r in rr]
         L.append(f'| `{a}` | {ci(f(rs))} | {ci(f(seeded))} | {ci(g(rs))} | {ci(g(seeded))} |')
@@ -109,7 +113,7 @@ def main():
     L.append('| arm | ' + ' | '.join(f'ε={e}' for e in eps) + ' | n·max s_j (peak layer) |')
     L.append('|---|' + '---|' * (len(eps) + 1))
     for a in sorted(arms):
-        rs = [r for r in arms[a] if r not in LEGACY]
+        rs = [r for r in arms[a] if not is_legacy(r)]
         cells = []
         for e in eps:
             vals = [nanmax(runs[r]['agg'].get(f'sink_rate_eps{e}', {}).get('mean', [])) for r in rs]
@@ -124,7 +128,7 @@ def main():
     L.append('| arm | anisotropy L0 | anisotropy last | anisotropy max | Rayleigh L0 | Rayleigh last | Rayleigh last/L0 |')
     L.append('|---|---|---|---|---|---|---|')
     for a in sorted(arms):
-        rs = [r for r in arms[a] if r not in LEGACY]
+        rs = [r for r in arms[a] if not is_legacy(r)]
         an0 = [runs[r]['agg']['anisotropy']['mean'][0] for r in rs]
         anL = [runs[r]['agg']['anisotropy']['mean'][-1] for r in rs]
         anM = [nanmax(runs[r]['agg']['anisotropy']['mean']) for r in rs]
@@ -139,7 +143,7 @@ def main():
     L.append('| arm | sink_value_ratio @ peak layer | min_value_ratio @ peak layer | peak layer(s) |')
     L.append('|---|---|---|---|')
     for a in sorted(arms):
-        rs = [r for r in arms[a] if r not in LEGACY]
+        rs = [r for r in arms[a] if not is_legacy(r)]
         sv, mv, pl = [], [], []
         for r in rs:
             agg = runs[r]['agg']
@@ -189,7 +193,7 @@ def main():
     for a in sorted(arms):
         if not a.startswith('zinc'):
             continue
-        rs = [r for r in arms[a] if r not in LEGACY]
+        rs = [r for r in arms[a] if not is_legacy(r)]
         s = [nanmax(runs[r]['agg']['overall_sink_rate']['mean']) for r in rs]
         m = [score(r) for r in rs]
         if s and m and all(v is not None for v in m):
@@ -234,7 +238,7 @@ def main():
     L.append('| arm | slope @ peak-sink layer | attn_norm_spearman @ peak-sink layer |')
     L.append('|---|---|---|')
     for a in sorted(arms):
-        rs = [r for r in arms[a] if r not in LEGACY]
+        rs = [r for r in arms[a] if not is_legacy(r)]
         sl, sp = [], []
         for r in rs:
             agg = runs[r]['agg']
@@ -244,6 +248,78 @@ def main():
             sl.append(agg['logit_norm_slope']['mean'][p])
             sp.append(agg['attn_norm_spearman']['mean'][p])
         L.append(f'| `{a}` | {ci(sl)} | {ci(sp)} |')
+
+    # J
+    L.append('\n## J. No-op test conditioned on WHO the sink is (per-graph, from eval_suite.pkl)\n')
+    L.append('Value ratio = ‖v‖ of the argmax-received node / mean ‖v‖ over the graph (head-mean). '
+             '"sink present" = at least one head with s_j > 0.3 in that graph and layer. '
+             'Medians over graphs; arm rows are mean ± CI over seeds of the per-seed medians.\n')
+    L.append('### J1. Virtual-node arms: VN-argmax graphs vs real-node-argmax graphs, per layer\n')
+    L.append('| run | layer | P(VN argmax) | ratio, VN argmax (med) | ratio, real-node argmax (med) '
+             '| P(VN argmax ∧ sink present) | ratio, VN argmax ∧ sink present (med) |')
+    L.append('|---|---|---|---|---|---|---|')
+    j2 = defaultdict(lambda: {'vn': [], 'real': [], 'p': []})
+    for r in sorted(runs):
+        if is_legacy(r) or not r.startswith('zinc') or 'vnode' not in r:
+            continue
+        pk = os.path.join(runs[r]['dir'], 'eval_suite.pkl')
+        if not os.path.exists(pk):
+            continue
+        with open(pk, 'rb') as f:
+            res = pickle.load(f)['results']
+        pl = peak_layer(runs[r]['agg'])
+        for l in sorted(k for k in res if k > 0):
+            g = [m for m in res[l] if 'vnode_is_sink' in m and 'sink_value_ratio' in m]
+            if not g:
+                continue
+            vn = [m['sink_value_ratio'] for m in g if m['vnode_is_sink'] == 1.0]
+            real = [m['sink_value_ratio'] for m in g if m['vnode_is_sink'] != 1.0]
+            vns = [m['sink_value_ratio'] for m in g
+                   if m['vnode_is_sink'] == 1.0 and m['overall_sink_rate'] > 0]
+            med = lambda x: f'{np.median(x):.3f} (G={len(x)})' if x else '--'
+            star = ' *' if l == pl else ''
+            L.append(f'| `{r}` | {l}{star} | {len(vn) / len(g):.3f} | {med(vn)} | {med(real)} '
+                     f'| {len(vns) / len(g):.3f} | {med(vns)} |')
+            if l == pl:
+                j2[arm_of(r)]['p'].append(len(vn) / len(g))
+                if vn:
+                    j2[arm_of(r)]['vn'].append(float(np.median(vn)))
+                if real:
+                    j2[arm_of(r)]['real'].append(float(np.median(real)))
+    L.append('\n(* = peak-sinking layer of that run; agg index == layer index, layer 0 is the input.)\n')
+    L.append('| arm (peak layer) | P(VN argmax) | ratio, VN argmax | ratio, real-node argmax |')
+    L.append('|---|---|---|---|')
+    for a in sorted(j2):
+        L.append(f"| `{a}` | {ci(j2[a]['p'])} | {ci(j2[a]['vn'])} | {ci(j2[a]['real'])} |")
+
+    L.append('\n### J2. All ZINC arms: value ratio of the argmax node at the peak layer, '
+             'graphs with a sink present only\n')
+    L.append('| arm | P(sink present) | ratio, sink present (med) | ratio, no sink (med) |')
+    L.append('|---|---|---|---|')
+    for a in sorted(arms):
+        if not a.startswith('zinc'):
+            continue
+        ps, rp, rn = [], [], []
+        for r in arms[a]:
+            if is_legacy(r):
+                continue
+            pk = os.path.join(runs[r]['dir'], 'eval_suite.pkl')
+            pl = peak_layer(runs[r]['agg'])
+            if pl is None or not os.path.exists(pk):
+                continue
+            with open(pk, 'rb') as f:
+                g = [m for m in pickle.load(f)['results'][pl] if 'sink_value_ratio' in m]
+            if not g:
+                continue
+            yes = [m['sink_value_ratio'] for m in g if m['overall_sink_rate'] > 0]
+            no = [m['sink_value_ratio'] for m in g if m['overall_sink_rate'] == 0]
+            ps.append(len(yes) / len(g))
+            if yes:
+                rp.append(float(np.median(yes)))
+            if no:
+                rn.append(float(np.median(no)))
+        if ps:
+            L.append(f'| `{a}` | {ci(ps)} | {ci(rp)} | {ci(rn)} |')
 
     md = '\n'.join(L) + '\n'
     print(md)

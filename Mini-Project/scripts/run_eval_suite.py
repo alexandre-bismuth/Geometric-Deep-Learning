@@ -13,6 +13,9 @@ Usage:
   # (no retraining; parameters are shared across the GRIT family). Writes
   # eval_suite_<suffix>.pkl / eval_summary_<suffix>.json / metrics_<suffix>.json only.
   python scripts/run_eval_suite.py --run-dir outputs/zinc-grit-s0 --attn-mode grit_noclamp
+  # (off-distribution: a clamp-trained checkpoint is broken under other scoring paths)
+  # re-evaluate an existing run without touching the files behind the submitted tables:
+  python scripts/run_eval_suite.py --run-dir outputs/zinc-grit-s0 --out-tag cr --no-spectra
 """
 import argparse
 import json
@@ -87,6 +90,9 @@ def main():
     p.add_argument('--device', default=None)
     p.add_argument('--attn-mode', default=None,
                    help='override model.attn_mode at evaluation time (GRIT family only)')
+    p.add_argument('--out-tag', default=None,
+                   help='append _<tag> to every output filename (re-evaluating an existing '
+                        'run without overwriting the files behind the submitted tables)')
     args = p.parse_args()
 
     device = torch.device(args.device) if args.device else \
@@ -100,6 +106,11 @@ def main():
         args.run_dir = os.path.join('outputs', f'randinit-{tag}')
         os.makedirs(args.run_dir, exist_ok=True)
     if args.attn_mode is not None:
+        from src.model import GritMultiHeadAttention
+        fam = GritMultiHeadAttention.GRIT_FAMILY
+        assert detect_arch(config) == 'grit' and \
+            config.get('model', {}).get('attn_mode', 'grit') in fam and args.attn_mode in fam, \
+            '--attn-mode needs a GRIT-family run and a GRIT-family mode'
         config.setdefault('model', {})['attn_mode'] = args.attn_mode
     arch = detect_arch(config)
     has_vnode = config.get('vnode', {}).get('enabled', False)
@@ -113,13 +124,15 @@ def main():
     suffix = ''
     if args.randinit:
         suffix = f'_randinit_s{args.seed}'
-    if args.attn_mode is not None:
-        suffix += f'_eval{args.attn_mode}'
     else:
         ckpt_path = os.path.join(args.run_dir, args.ckpt)
         state = torch.load(ckpt_path, map_location=device, weights_only=True)
         model.load_state_dict(state)
         print(f"loaded {ckpt_path}")
+    if args.attn_mode is not None:
+        suffix += f'_eval{args.attn_mode}'
+    if args.out_tag:
+        suffix += f'_{args.out_tag}'
 
     # R3: task metrics, persisted
     if not args.randinit:

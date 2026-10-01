@@ -38,6 +38,8 @@ class GritMultiHeadAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_dim // num_heads
         self.attn_mode = attn_mode
+        assert attn_mode in self.GRIT_FAMILY + ('dot_bias', 'dot'), \
+            f'unknown attn_mode {attn_mode!r}'
         h = self.head_dim
 
         self.W_Q = nn.Linear(hidden_dim, hidden_dim, bias=True)

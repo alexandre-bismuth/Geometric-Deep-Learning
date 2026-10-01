@@ -7,7 +7,8 @@ import wandb
 from tqdm.auto import tqdm
 from sklearn.metrics import average_precision_score, f1_score
 
-from src.train import _config_fingerprint, _save_ckpt, _try_resume
+from src.train import _config_fingerprint, _save_ckpt, _try_resume, _check_finite, _write_curve, \
+    _atomic_save
 
 
 def _build_real_node_mask(batch):
@@ -192,12 +193,13 @@ def train_model(model, train_loader, val_loader, config, device, task, save_dir=
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
+        _check_finite(save_dir, epoch, train_loss, val_loss, train_losses, val_losses)
 
         current_lr = optimizer.param_groups[0]['lr']
 
         if is_better(val_metric, best_val_metric, task):
             best_val_metric = val_metric
-            torch.save(model.state_dict(), os.path.join(save_dir, 'best_model.pt'))
+            _atomic_save(model.state_dict(), os.path.join(save_dir, 'best_model.pt'))
 
         pbar.set_postfix({
             'train': f'{train_loss:.4f}',
@@ -219,7 +221,8 @@ def train_model(model, train_loader, val_loader, config, device, task, save_dir=
             _save_ckpt(save_dir, epoch, epochs, model, optimizer, scheduler,
                        best_val_metric, train_losses, val_losses, fingerprint)
 
-    torch.save(model.state_dict(), os.path.join(save_dir, 'final_model.pt'))
+    _atomic_save(model.state_dict(), os.path.join(save_dir, 'final_model.pt'))
+    _write_curve(save_dir, train_losses, val_losses)
     if ckpt_every:
         for _f in ('ckpt.pt', 'ckpt.pt.tmp'):
             try:

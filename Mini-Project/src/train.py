@@ -188,6 +188,26 @@ def _save_ckpt(save_dir, epoch, epochs, model, optimizer, scheduler, best_val_me
         json.dump({'path': path, 'epoch': epoch, 'epochs': epochs, 'complete': False}, f)
 
 
+def _atomic_save(obj, path):
+    """tmp-then-rename, so a copy taken mid-write (rsync to Lustre) is never half a file."""
+    torch.save(obj, path + '.tmp')
+    os.replace(path + '.tmp', path)
+
+
+def _write_curve(save_dir, train_losses, val_losses):
+    with open(os.path.join(save_dir, 'train_curve.json'), 'w') as f:
+        json.dump({'train_loss': [float(x) for x in train_losses],
+                   'val_loss': [float(x) for x in val_losses]}, f)
+
+
+def _check_finite(save_dir, epoch, train_loss, val_loss, train_losses, val_losses):
+    """A diverged run must FAIL (non-zero exit), not finish with a frozen best_model.pt."""
+    if not (np.isfinite(train_loss) and np.isfinite(val_loss)):
+        _write_curve(save_dir, train_losses, val_losses)
+        raise FloatingPointError(f'non-finite loss at epoch {epoch}: '
+                                 f'train={train_loss} val={val_loss}')
+
+
 def _try_resume(save_dir, device, model, optimizer, scheduler, fingerprint, epochs):
     """Return (start_epoch, best_val_metric, train_losses, val_losses) — 1/None/[]/[] if fresh."""
     path = os.path.join(save_dir, 'ckpt.pt')
@@ -260,12 +280,13 @@ def train_model(model, train_loader, val_loader, config, device, task, save_dir=
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
+        _check_finite(save_dir, epoch, train_loss, val_loss, train_losses, val_losses)
 
         current_lr = optimizer.param_groups[0]['lr']
 
         if is_better(val_metric, best_val_metric, task):
             best_val_metric = val_metric
-            torch.save(model.state_dict(), os.path.join(save_dir, 'best_model.pt'))
+            _atomic_save(model.state_dict(), os.path.join(save_dir, 'best_model.pt'))
 
         pbar.set_postfix({
             'train': f'{train_loss:.4f}',
@@ -287,7 +308,8 @@ def train_model(model, train_loader, val_loader, config, device, task, save_dir=
             _save_ckpt(save_dir, epoch, epochs, model, optimizer, scheduler,
                        best_val_metric, train_losses, val_losses, fingerprint)
 
-    torch.save(model.state_dict(), os.path.join(save_dir, 'final_model.pt'))
+    _atomic_save(model.state_dict(), os.path.join(save_dir, 'final_model.pt'))
+    _write_curve(save_dir, train_losses, val_losses)
     if ckpt_every:                      # run finished: drop the snapshot, mark the breadcrumb
         for f in ('ckpt.pt', 'ckpt.pt.tmp'):
             try:

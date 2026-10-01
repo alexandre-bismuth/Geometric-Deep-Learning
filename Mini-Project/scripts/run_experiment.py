@@ -106,6 +106,9 @@ def main():
           f"Hidden: {config['model']['hidden_dim']}, "
           f"Heads: {config['model']['num_heads']}, "
           f"RRWP K={config['pe']['dim']}")
+    print(f"attn_mode={config['model'].get('attn_mode', 'grit')} "
+          f"edge_input={config['model'].get('edge_input', 'full')} "
+          f"use_node_pe={config['model'].get('use_node_pe', True)}")
     node_filter = config['data'].get('node_count_filter')
     if node_filter:
         print(f"Node filter: ({node_filter['min_nodes']}, {node_filter['max_nodes']}]")

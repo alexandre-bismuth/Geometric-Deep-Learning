@@ -886,3 +886,8 @@ MigrationBackup/
 .ionide/
 
 # End of https://www.toptal.com/developers/gitignore/api/vs,macos,python,jupyternotebooks,latex
+### GDDL camera-ready (one-node scheduler)
+Mini-Project/manifests/cr1_state/
+Mini-Project/outputs/*/ckpt.pt
+Mini-Project/outputs/*/*.tmp
+Mini-Project/outputs/*/eval_suite_cr.pkl
