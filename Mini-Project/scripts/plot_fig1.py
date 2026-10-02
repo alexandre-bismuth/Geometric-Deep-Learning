@@ -8,7 +8,7 @@ one shared colour scale across panels.
 
 Usage:
   python scripts/plot_fig1.py outputs/figures/fig1_data.json -o outputs/figures/fig1.pdf \
-      [--subtitles "gated score" "dot-product score" ...] [--vlim 3]
+      [--panels GRIT GRIT-dotlogit GraphGPS] [--subtitles "gated score" ...] [--vlim 3]
 """
 import argparse
 import json
@@ -26,6 +26,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('data')
     ap.add_argument('-o', '--out', default='outputs/figures/fig1.pdf')
+    ap.add_argument('--panels', nargs='+', default=None, help='panel labels to keep, in order (default: all)')
     ap.add_argument('--subtitles', nargs='+', default=None)
     ap.add_argument('--vlim', type=float, default=3.0, help='colour range ±log2(n s) (3 = x1/8..x8)')
     ap.add_argument('--width', type=float, default=5.5, help='inches (NeurIPS text width 5.5)')
@@ -35,6 +36,9 @@ def main():
     with open(args.data) as f:
         d = json.load(f)
     g, panels, eps = d['graph'], d['panels'], d['eps']
+    if args.panels:
+        by_label = {p['label']: p for p in panels}
+        panels = [by_label[k] for k in args.panels]
     n = g['num_nodes']
     G = nx.Graph()
     G.add_nodes_from(range(n))
