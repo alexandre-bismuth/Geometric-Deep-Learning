@@ -72,7 +72,8 @@ def main():
         if not runs:
             raise SystemExit(f'no seeded runs for {prefix}')
         for d in sorted(runs):
-            keep = glob.glob(os.path.join(d, '*.json')) + [os.path.join(d, 'config.yaml')]
+            keep = [f for f in glob.glob(os.path.join(d, '*.json'))   # perturbation: not in the paper
+                    if not os.path.basename(f).startswith('perturbation')] + [os.path.join(d, 'config.yaml')]
             keep += [os.path.join(d, x) for x in EXTRA.get(prefix, [])]
             for f in keep:
                 copy(f, os.path.join(dest, os.path.relpath(f, root)))
