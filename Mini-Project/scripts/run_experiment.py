@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.model import InstrumentedGRIT
 from src.datasets import get_dataloaders, DATASET_INFO
 from src.train import train_model, eval_epoch, build_criterion
-from src.diagnostics import run_diagnostics, aggregate_metrics, save_diagnostics, print_summary
+from src.diagnostics_v2 import run_diagnostics_v2, aggregate_v2, compute_stability, save_suite
 
 
 def deep_merge(base, override):
@@ -158,22 +158,24 @@ def main():
         wandb.log({f'test/{metric_name}': test_metric, 'test/loss': test_loss})
 
     if config['diagnostics']['enabled']:
+        # Quick end-of-training check with the v2 diagnostics (the paper's numbers come from
+        # scripts/run_eval_suite.py on the full test set, which writes eval_summary.json).
         print("\nRunning diagnostics...")
-        metrics = run_diagnostics(model, test_loader, device, max_graphs=config['diagnostics']['max_graphs'])
-
-        diag_path = os.path.join(save_dir, 'diagnostics.pkl')
-        save_diagnostics(metrics, diag_path)
-
-        agg, layers = aggregate_metrics(metrics)
-        print_summary(agg, layers)
+        results_v2 = run_diagnostics_v2(model, test_loader, device,
+                                        max_graphs=config['diagnostics']['max_graphs'], spectra=False,
+                                        has_vnode=config.get('vnode', {}).get('enabled', False))
+        agg, layers = aggregate_v2(results_v2)
+        save_suite(results_v2, agg, layers, compute_stability(results_v2), save_dir, suffix='_train')
+        for key in ('max_sink_score', 'overall_sink_rate', 'norm_sink_score'):
+            vals = [v for v in agg.get(key, {}).get('mean', []) if v == v]
+            if vals:
+                print(f"  {key}: peak={max(vals):.4f} final={agg[key]['mean'][-1]:.4f}")
 
         if use_wandb:
-            for key in ['max_sink_score', 'overall_sink_rate', 'matrix_entropy', 'anisotropy', 'max_to_mean_ratio']:
-                if key in agg:
-                    vals = agg[key]['mean']
-                    valid = vals[~np.isnan(vals)] if hasattr(vals, '__len__') else []
-                    if len(valid) > 0:
-                        wandb.log({f'diag/{key}_max': float(np.nanmax(vals)), f'diag/{key}_final': float(vals[-1]) if not np.isnan(vals[-1]) else None})
+            for key in ['max_sink_score', 'overall_sink_rate', 'norm_sink_score']:
+                vals = [v for v in agg.get(key, {}).get('mean', []) if v == v]
+                if vals:
+                    wandb.log({f'diag/{key}_max': float(max(vals)), f'diag/{key}_final': float(vals[-1])})
 
     if use_wandb:
         wandb.finish()

@@ -99,8 +99,7 @@ class Out:
 def seeded_runs(outputs, prefix):
     return sorted(d for d in glob.glob(os.path.join(outputs, prefix + '-s[0-9]'))
                   if os.path.isfile(os.path.join(d, 'eval_summary.json'))
-                  and os.path.isfile(os.path.join(d, 'metrics.json'))
-                  and os.path.isfile(os.path.join(d, 'final_model.pt')))
+                  and os.path.isfile(os.path.join(d, 'metrics.json')))
 
 
 def main():
@@ -329,6 +328,8 @@ def main():
         for d in arm[k]['runs']:
             agg = load(os.path.join(d, 'eval_summary.json'))['agg']
             p = peak(agg)
+            if not os.path.isfile(os.path.join(d, 'eval_suite.pkl')):   # not in the public release
+                continue
             with open(os.path.join(d, 'eval_suite.pkl'), 'rb') as f:
                 g = [m for m in pickle.load(f)['results'][p] if 'sink_value_ratio' in m]
             yes = [m['sink_value_ratio'] for m in g if m['overall_sink_rate'] > 0]
