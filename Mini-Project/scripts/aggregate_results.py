@@ -153,6 +153,9 @@ def main():
                          'unseeded; zinc-graphgps: unseeded)')
     args = ap.parse_args()
 
+    # the public release ships results without checkpoints; its outputs/RUNS_COMPLETE marks
+    # every run in it as fully trained
+    complete = os.path.exists(os.path.join(args.outputs, 'RUNS_COMPLETE'))
     runs = []
     for d in sorted(glob.glob(os.path.join(args.outputs, '*'))):
         if not os.path.isdir(d):
@@ -162,7 +165,7 @@ def main():
         r = collect_run(d)
         if r.get('score') is None and r.get('sink') is None:
             continue                      # nothing scored yet: not a result
-        if not r['trained'] and not args.include_partial:
+        if not r['trained'] and not complete and not args.include_partial:
             r['partial'] = True
         runs.append(r)
 

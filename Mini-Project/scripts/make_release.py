@@ -77,6 +77,8 @@ def main():
             for f in keep:
                 copy(f, os.path.join(dest, os.path.relpath(f, root)))
                 n += 1
+    with open(os.path.join(dest, 'outputs', 'RUNS_COMPLETE'), 'w') as f:
+        f.write('Every run in this directory finished training; checkpoints are not included.\n')
     for f in sorted(os.listdir(os.path.join(root, 'release_files'))):
         copy(os.path.join(root, 'release_files', f), os.path.join(dest, f))
         n += 1
