@@ -6,7 +6,8 @@ reports, and the small result files from which every number regenerates
 (scripts/paper_numbers.py). Checkpoints and per-graph pickles are left out, except the
 few that paper_numbers.py reads (GRIT checkpoints for the score-spread bound, the full
 Peptides-func eval pickles for the size bins, the GraphGPS + virtual node pickles for the
-sink's value norm). README, LICENSE, requirements.txt and .gitignore come from release_files/.
+sink's value norm, the GRIT + virtual node + bias checkpoints for the learned offset).
+README, LICENSE, requirements.txt and .gitignore come from release_files/.
 
 Usage: python scripts/make_release.py --dest ../../release/graph-transformer-sinks
 """
@@ -42,6 +43,7 @@ RUNS = ['zinc-grit', 'zinc-grit-dotlogit', 'zinc-grit-blind', 'zinc-grit-dot', '
 EXTRA = {   # run family -> additional (non-JSON) files that paper_numbers.py reads
     'zinc-grit': ['best_model.pt'],
     'zinc-grit-vnode': ['best_model.pt'],
+    'zinc-grit-vnode-bias': ['best_model.pt'],
     'zinc-gps-vnode': ['eval_suite.pkl'],
     'peptides-grit': ['eval_suite.pkl'],
 }
@@ -78,8 +80,6 @@ def main():
             for f in keep:
                 copy(f, os.path.join(dest, os.path.relpath(f, root)))
                 n += 1
-    with open(os.path.join(dest, 'outputs', 'RUNS_COMPLETE'), 'w') as f:
-        f.write('Every run in this directory finished training; checkpoints are not included.\n')
     for f in sorted(os.listdir(os.path.join(root, 'release_files'))):
         copy(os.path.join(root, 'release_files', f), os.path.join(dest, f))
         n += 1

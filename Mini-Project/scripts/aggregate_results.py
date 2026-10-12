@@ -54,8 +54,9 @@ def load(path):
 
 def collect_run(run_dir):
     """Every scalar we care about from one run dir. Missing pieces stay None."""
+    # training snapshots ckpt.pt every 50 epochs and deletes it when the run finishes
     r = {'run': os.path.basename(run_dir),
-         'trained': os.path.exists(os.path.join(run_dir, 'final_model.pt'))}
+         'trained': not os.path.exists(os.path.join(run_dir, 'ckpt.pt'))}
 
     m = load(os.path.join(run_dir, 'metrics.json'))
     if m:
@@ -146,16 +147,13 @@ def main():
     ap.add_argument('-o', '--out', help='write markdown here (default: stdout only)')
     ap.add_argument('--json', help='also dump the raw aggregate as JSON')
     ap.add_argument('--include-partial', action='store_true',
-                    help='include runs with no final_model.pt (walltime-killed)')
+                    help='do not flag runs that still have a training snapshot ckpt.pt (walltime-killed)')
     ap.add_argument('--seeded-only', action='store_true',
                     help='camera-ready: keep only seed-controlled runs (<arm>-s<k>); drops the '
                          'legacy unsuffixed April runs (zinc-grit, zinc-grit-vnode: 1000 epochs, '
                          'unseeded; zinc-graphgps: unseeded)')
     args = ap.parse_args()
 
-    # the public release ships results without checkpoints; its outputs/RUNS_COMPLETE marks
-    # every run in it as fully trained
-    complete = os.path.exists(os.path.join(args.outputs, 'RUNS_COMPLETE'))
     runs = []
     for d in sorted(glob.glob(os.path.join(args.outputs, '*'))):
         if not os.path.isdir(d):
@@ -165,7 +163,7 @@ def main():
         r = collect_run(d)
         if r.get('score') is None and r.get('sink') is None:
             continue                      # nothing scored yet: not a result
-        if not r['trained'] and not complete and not args.include_partial:
+        if not r['trained'] and not args.include_partial:
             r['partial'] = True
         runs.append(r)
 
@@ -181,7 +179,7 @@ def main():
 
     partial = [r['run'] for r in runs if r.get('partial')]
     if partial:
-        L.append(f"> **Partial runs included** (no final_model.pt): {', '.join(partial)}\n")
+        L.append(f"> **Partial runs included** (training snapshot ckpt.pt still present): {', '.join(partial)}\n")
 
     L.append("\n## Main table — sink rate and task score\n")
     L.append("| arm | n | sink rate | score | metric | sink consistency | top1/top2 |")

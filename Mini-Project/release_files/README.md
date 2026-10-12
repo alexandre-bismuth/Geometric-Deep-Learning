@@ -29,14 +29,17 @@ python scripts/paper_numbers.py --out-dir paper_numbers
 ```
 
 which writes `numbers.tex` (one LaTeX macro per number) and the appendix table rows.
-Checkpoints are not included, except the GRIT ZINC ones that the score-spread bound
-(Appendix A) is computed from.
+Checkpoints (`best_model.pt`) are included only for the GRIT ZINC runs with and without a
+virtual node, from which `paper_numbers.py` computes the logit range 5‖a‖₁ (Appendix A) and
+the learned virtual-node offset.
 
 ## Training and evaluating a model
 
 Each arm is a config in `configs/`, merged over the defaults in `configs/base.yaml`;
 GRIT-family arms run with `run_experiment.py`, GraphGPS arms (`zinc_graphgps.yaml`,
 `zinc_gps_*.yaml`) with `run_experiment_graphgps.py`. The seed is appended to the run name.
+Training writes into `outputs/<run name>` and replaces the shipped results of that run; add
+`--logging.save_dir <dir>` to write elsewhere.
 
 ```bash
 # train (writes outputs/zinc-grit-s0)
@@ -63,7 +66,7 @@ correctness checks of the sink metrics and models on CPU.
 
 | Paper | Arms / script |
 |---|---|
-| Figure 1 | `make_fig1_data.py` (from trained runs), then `plot_fig1.py outputs/figures/fig1_data.json --panels GRIT GRIT-dotlogit GraphGPS` |
+| Figure 1 | `make_fig1_data.py` (from trained runs), then `plot_fig1.py` (below) |
 | Sink rates, ε sweep, peak share (Sec. 2, Tables 1 and 3) | `run_eval_suite.py` |
 | Size trend (Sec. 2) | `peptides_grit.yaml`, `peptides_grit_q{1..4}m.yaml` |
 | Language models (Sec. 2, App. C) | `lm_sink_reference.py` |
@@ -74,6 +77,13 @@ correctness checks of the sink metrics and models on CPU.
 | Ablation ratios (Sec. 4, App. C) | `run_sink_ablation.py` |
 | Entropy penalty (Sec. 4) | `zinc_grit_forced_ent{1,2}.yaml` |
 | All numbers | `paper_numbers.py` |
+
+Figure 1 (`outputs/figures/fig1_measured.pdf`) is redrawn from the shipped data by
+
+```bash
+python scripts/plot_fig1.py outputs/figures/fig1_data.json --panels GRIT GRIT-dotlogit GraphGPS \
+  --height 1.5 --subtitles "gated score (published)" "only the logit is a dot product" "GINE + dot product"
+```
 
 ## Hardware
 
